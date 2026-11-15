@@ -252,8 +252,8 @@ function setAutostart(enable) {
     if (info.platform === 'win32') {
       const vbsContent = [
         'Set WshShell = CreateObject("WScript.Shell")',
-        `WshShell.CurrentDirectory = "${info.workDir.replace(/\\/g, '\\\\')}"`,
-        `WshShell.Run "node """ & "${info.scriptPath.replace(/\\/g, '\\\\')}" & """", 0, False`,
+        `WshShell.CurrentDirectory = "${info.workDir}"`,
+        `WshShell.Run "node """ & "${info.scriptPath}" & """", 0, False`,
         ''
       ].join('\r\n');
       fs.writeFileSync(info.path, vbsContent, 'utf8');
