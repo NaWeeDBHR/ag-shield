@@ -728,17 +728,19 @@ function simplifySchema(schema) {
 
 function isTitleGenerationRequest(body) {
   if (!body || !Array.isArray(body.messages) || body.messages.length === 0) return false;
+  if (Array.isArray(body.tools) && body.tools.length > 0) return false;
   const sysMsg = body.messages.find(m => m.role === 'system');
   if (sysMsg && typeof sysMsg.content === 'string' && sysMsg.content.startsWith('You name chat sessions.')) {
     return true;
   }
   const maxTokens = body.max_tokens || body.max_completion_tokens;
   const lastMsg = body.messages[body.messages.length - 1];
+  if (!lastMsg || lastMsg.role !== 'user') return false;
   const content = typeof lastMsg?.content === 'string'
     ? lastMsg.content
     : Array.isArray(lastMsg?.content) ? lastMsg.content.map(c => c.text || '').join(' ') : '';
 
-  if (/(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i.test(content)) {
+  if (body.messages.length <= 4 && /(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i.test(content)) {
     return true;
   }
   if (maxTokens && maxTokens <= 25 && /title/i.test(content)) return true;
@@ -818,10 +820,10 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
     }
 
     if (Array.isArray(json.messages)) {
-      if (options.mockLocalTitles !== false) {
+      if (options.mockLocalTitles !== false && isTitleGenerationRequest(json)) {
+        isTitleRequest = true;
         const sysMsg = json.messages.find(m => m.role === 'system');
         if (sysMsg && typeof sysMsg.content === 'string' && sysMsg.content.startsWith('You name chat sessions.')) {
-          isTitleRequest = true;
           const uMsg = json.messages.find(m => m.role === 'user');
           if (uMsg && typeof uMsg.content === 'string') {
             userTextForTitle = uMsg.content.trim().split('\n')[0].slice(0, 35) || 'New Chat';
@@ -831,13 +833,7 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
           const lastContent = typeof lastMsg?.content === 'string'
             ? lastMsg.content
             : Array.isArray(lastMsg?.content) ? lastMsg.content.map(c => c.text || '').join(' ') : '';
-          if (/(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i.test(lastContent)) {
-            isTitleRequest = true;
-            const firstUser = json.messages.find(m => m.role === 'user');
-            if (firstUser && typeof firstUser.content === 'string') {
-              userTextForTitle = firstUser.content.trim().split('\n')[0].slice(0, 35) || 'New Chat';
-            }
-          }
+          userTextForTitle = lastContent.trim().split('\n')[0].slice(0, 35) || 'New Chat';
         }
       }
 
@@ -1151,22 +1147,57 @@ const server = http.createServer((req, res) => {
 
     let model = 'N/A';
     let toolCount = 0;
+    let isStream = false;
     try {
       const parsed = JSON.parse(modifiedBody);
       model = parsed.model || 'N/A';
       toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
+      isStream = Boolean(parsed.stream);
     } catch (_) {}
 
     if (isTitleRequest) {
       stats.savedTitleCalls++;
-      const mockResponse = generateMockTitleResponse(userTextForTitle, model);
-      const fakeTitleResp = JSON.stringify(mockResponse);
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Content-Length': Buffer.byteLength(fakeTitleResp)
-      });
-      res.end(fakeTitleResp);
+      if (isStream) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*'
+        });
+        const chunk = {
+          id: 'chatcmpl-local-title',
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{
+            index: 0,
+            delta: { content: JSON.stringify({ title: userTextForTitle }) },
+            finish_reason: null
+          }]
+        };
+        const doneChunk = {
+          id: 'chatcmpl-local-title',
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: 'stop'
+          }]
+        };
+        res.write(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(doneChunk)}\n\ndata: [DONE]\n\n`);
+        res.end();
+      } else {
+        const mockResponse = generateMockTitleResponse(userTextForTitle, model);
+        const fakeTitleResp = JSON.stringify(mockResponse);
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Content-Length': Buffer.byteLength(fakeTitleResp)
+        });
+        res.end(fakeTitleResp);
+      }
       console.log(`[${new Date().toISOString()}] ⚡ Handled session title locally ("${userTextForTitle}")`);
       logTraffic({
         id: Date.now(),

@@ -96,6 +96,25 @@ console.log('Running AG-Shield comprehensive test suite...');
   };
   assert.strictEqual(isTitleGenerationRequest(normalReq), false, 'Should not detect normal prompt as title');
 
+  // Should NOT detect requests with tools as title request
+  const toolReq = {
+    model: 'gemini-2.5-pro',
+    messages: [{ role: 'user', content: 'Generate a short title' }],
+    tools: [{ type: 'function', function: { name: 'test' } }]
+  };
+  assert.strictEqual(isTitleGenerationRequest(toolReq), false, 'Should not flag tool-bearing requests as title');
+
+  // Should NOT detect tool output containing "session title" as title request
+  const toolOutputReq = {
+    model: 'gemini-2.5-pro',
+    messages: [
+      { role: 'user', content: '[CONTEXT COMPACTION — REFERENCE ONLY]' },
+      { role: 'assistant', content: '', tool_calls: [{ id: '1', function: { name: 'test' } }] },
+      { role: 'tool', content: 'Handled session title locally' }
+    ]
+  };
+  assert.strictEqual(isTitleGenerationRequest(toolOutputReq), false, 'Should not flag tool outputs as title');
+
   const mock = generateMockTitleResponse(titleReq);
   assert.strictEqual(mock.object, 'chat.completion', 'Should return valid chat completion object');
   assert.strictEqual(mock.choices[0].message.role, 'assistant', 'Should return assistant role');
