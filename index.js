@@ -55,19 +55,55 @@ function getAutostartInfo() {
   const platform = process.platform;
   const scriptPath = path.resolve(__dirname, 'index.js');
   const workDir = path.dirname(scriptPath);
+  const nodeBin = process.execPath;
+  const user = process.env.USER || process.env.USERNAME || 'root';
+
+  const systemdSnippet = `[Unit]
+Description=AG-Shield (Antigravity & Agentic AI Sanitizer Proxy)
+After=network.target
+
+[Service]
+Type=simple
+User=${user}
+WorkingDirectory=${workDir}
+ExecStart=${nodeBin} "${scriptPath}"
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+`;
 
   if (platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     const startupDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
     const vbsPath = path.join(startupDir, 'ag-shield.vbs');
-    return { platform, path: vbsPath, enabled: fs.existsSync(vbsPath), scriptPath, workDir };
+    return { platform, type: 'windows-startup', path: vbsPath, enabled: fs.existsSync(vbsPath), scriptPath, workDir, systemdSnippet };
   } else if (platform === 'darwin') {
     const plistPath = path.join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.ag-shield.plist');
-    return { platform, path: plistPath, enabled: fs.existsSync(plistPath), scriptPath, workDir };
+    return { platform, type: 'launchd', path: plistPath, enabled: fs.existsSync(plistPath), scriptPath, workDir, systemdSnippet };
   } else {
-    const autoDir = path.join(process.env.HOME || '', '.config', 'autostart');
+    // Linux
+    const home = process.env.HOME || '';
+    const systemdUserDir = path.join(home, '.config', 'systemd', 'user');
+    const systemdUserService = path.join(systemdUserDir, 'ag-shield.service');
+    const autoDir = path.join(home, '.config', 'autostart');
     const desktopPath = path.join(autoDir, 'ag-shield.desktop');
-    return { platform, path: desktopPath, enabled: fs.existsSync(desktopPath), scriptPath, workDir };
+    const isService = fs.existsSync(systemdUserService);
+    const isDesktop = fs.existsSync(desktopPath);
+
+    return {
+      platform,
+      type: isService ? 'systemd-user' : (isDesktop ? 'desktop-autostart' : 'systemd-user'),
+      path: isService ? systemdUserService : desktopPath,
+      systemdUserService,
+      desktopPath,
+      enabled: isService || isDesktop,
+      scriptPath,
+      workDir,
+      systemdSnippet
+    };
   }
 }
 
@@ -75,6 +111,18 @@ function setAutostart(enable) {
   const info = getAutostartInfo();
   try {
     if (!enable) {
+      if (info.platform === 'linux') {
+        if (info.systemdUserService && fs.existsSync(info.systemdUserService)) {
+          try { require('child_process').execSync('systemctl --user disable ag-shield --now', { stdio: 'ignore' }); } catch (_) {}
+          try { fs.unlinkSync(info.systemdUserService); } catch (_) {}
+          try { require('child_process').execSync('systemctl --user daemon-reload', { stdio: 'ignore' }); } catch (_) {}
+        }
+        if (info.desktopPath && fs.existsSync(info.desktopPath)) {
+          try { fs.unlinkSync(info.desktopPath); } catch (_) {}
+        }
+        return { success: true, enabled: false, path: info.path };
+      }
+
       if (fs.existsSync(info.path)) {
         fs.unlinkSync(info.path);
       }
@@ -114,17 +162,49 @@ function setAutostart(enable) {
 </plist>`;
       fs.writeFileSync(info.path, plist, 'utf8');
     } else {
+      // Linux: enable both systemd user service and desktop entry
+      const home = process.env.HOME || '';
+      const systemdUserDir = path.join(home, '.config', 'systemd', 'user');
+      const servicePath = path.join(systemdUserDir, 'ag-shield.service');
+      const autoDir = path.join(home, '.config', 'autostart');
+      const desktopPath = path.join(autoDir, 'ag-shield.desktop');
+
+      if (!fs.existsSync(systemdUserDir)) fs.mkdirSync(systemdUserDir, { recursive: true });
+      const userUnit = `[Unit]
+Description=AG-Shield (Antigravity & Agentic AI Sanitizer Proxy)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${info.workDir}
+ExecStart=${process.execPath} "${info.scriptPath}"
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
+`;
+      fs.writeFileSync(servicePath, userUnit, 'utf8');
+
+      if (!fs.existsSync(autoDir)) fs.mkdirSync(autoDir, { recursive: true });
       const desktop = `[Desktop Entry]
 Type=Application
 Name=AG-Shield
 Comment=Antigravity & Agentic AI Sanitizer Proxy
-Exec=node "${info.scriptPath}"
+Exec=${process.execPath} "${info.scriptPath}"
 Path=${info.workDir}
 Terminal=false
 Hidden=false
 X-GNOME-Autostart-enabled=true
 `;
-      fs.writeFileSync(info.path, desktop, 'utf8');
+      fs.writeFileSync(desktopPath, desktop, 'utf8');
+
+      try {
+        require('child_process').execSync('systemctl --user daemon-reload && systemctl --user enable ag-shield', { stdio: 'ignore' });
+      } catch (_) {}
+
+      return { success: true, enabled: true, path: servicePath };
     }
 
     return { success: true, enabled: true, path: info.path };
@@ -157,6 +237,7 @@ Flags:
   --autostart-enable    Enable auto-start on system boot
   --autostart-disable   Disable auto-start on system boot
   --autostart-status    Check auto-start configuration status
+  --install-systemd     Install systemd system service on Linux (/etc/systemd/system)
   --help, -h            Show this help message
 
 Web Dashboard:
@@ -173,7 +254,26 @@ Web Dashboard:
     process.exit(0);
   } else if (arg === '--autostart-status') {
     const info = getAutostartInfo();
-    console.log(`[AG-SHIELD] Autostart (${info.platform}): ${info.enabled ? 'ENABLED' : 'DISABLED'} -> ${info.path}`);
+    console.log(`[AG-SHIELD] Autostart (${info.platform} / ${info.type}): ${info.enabled ? 'ENABLED' : 'DISABLED'} -> ${info.path}`);
+    process.exit(0);
+  } else if (arg === '--install-systemd') {
+    const info = getAutostartInfo();
+    const targetFile = '/etc/systemd/system/ag-shield.service';
+    try {
+      fs.writeFileSync(targetFile, info.systemdSnippet, 'utf8');
+      require('child_process').execSync('systemctl daemon-reload && systemctl enable --now ag-shield');
+      console.log(`[AG-SHIELD] Successfully installed systemd service to ${targetFile} and started.`);
+    } catch (err) {
+      console.log(`
+[AG-SHIELD] To install systemd service on Linux, run:
+
+sudo tee ${targetFile} << 'EOF'
+${info.systemdSnippet.trim()}
+EOF
+
+sudo systemctl daemon-reload && sudo systemctl enable --now ag-shield
+`);
+    }
     process.exit(0);
   } else if (arg === '--log' || arg === '-l') {
     fileLogging = true;

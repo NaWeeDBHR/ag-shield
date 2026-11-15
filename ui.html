@@ -514,6 +514,7 @@
             <div class="switch-info">
               <div class="switch-name" style="color:#93c5fd;">🚀 Run on System Boot (Autostart)</div>
               <div class="switch-desc" id="autostart-desc">Auto-launch silently in background on OS startup</div>
+              <button id="linux-service-btn" class="btn-copy" style="font-size:0.7rem; padding:3px 8px; margin-top:6px; display:inline-flex;" onclick="copyLinuxService()">📋 Linux systemd Command</button>
             </div>
             <label class="toggle">
               <input type="checkbox" id="cfg-autostart" onchange="toggleAutostart()">
@@ -766,12 +767,22 @@
       if (info.enabled) {
         pill.innerText = 'Boot: ACTIVE';
         pill.classList.add('pill-active');
-        desc.innerText = `Auto-start active (${info.platform}) -> ${info.path}`;
+        desc.innerText = `Auto-start active (${info.platform} / ${info.type || 'service'}) -> ${info.path}`;
       } else {
         pill.innerText = 'Boot: OFF';
         pill.classList.remove('pill-active');
-        desc.innerText = `Auto-start disabled (${info.platform})`;
+        const hint = info.platform === 'linux' ? ' (systemd-user / desktop)' : '';
+        desc.innerText = `Auto-start disabled on ${info.platform}${hint}`;
       }
+    }
+
+    function copyLinuxService() {
+      const cmd = 'sudo node ' + (autostartInfo.scriptPath || 'index.js') + ' --install-systemd';
+      navigator.clipboard.writeText(cmd).then(() => {
+        showToast('Copied: ' + cmd);
+      }).catch(() => {
+        showToast('Command: ' + cmd);
+      });
     }
 
     async function toggleAutostart() {

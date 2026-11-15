@@ -79,9 +79,10 @@ node index.js 20129 20128
 node index.js --host 192.168.1.100 --target-port 8000 --log
 
 # System Autostart CLI commands:
-node index.js --autostart-enable   # Register in Windows Startup / Linux Autostart
+node index.js --autostart-enable   # Register in Windows Startup / Linux systemd-user
 node index.js --autostart-disable  # Remove from boot startup
 node index.js --autostart-status   # Show current autostart status
+sudo node index.js --install-systemd # Install & enable system-wide Linux systemd service
 
 # Flags:
 #   --log, -l              Append traffic events to proxy-traffic.log
@@ -105,6 +106,34 @@ Open **`http://127.0.0.1:20129/ui`** in your browser:
 - **Live Traffic Inspector:** Real-time table showing latency, HTTP status, tool count, and an inspect drawer for payload debugging.
 
 ---
+
+
+---
+
+## 🐧 Linux Server / VPS Setup
+
+On Linux headless servers (Ubuntu, Debian, CentOS), you can run AG-Shield as a native background `systemd` service:
+
+### Option A: Automatic 1-Liner Systemd Installation
+```bash
+sudo node index.js --install-systemd
+```
+This automatically writes `/etc/systemd/system/ag-shield.service`, reloads systemd, and starts AG-Shield on boot.
+
+### Option B: User-Level Service (No Root Required)
+```bash
+node index.js --autostart-enable
+# Keep service running when SSH disconnects:
+loginctl enable-linger $USER
+```
+
+### Option C: PM2
+```bash
+npm install -g pm2
+pm2 start index.js --name ag-shield
+pm2 startup
+pm2 save
+```
 
 ## 🔧 Client Configuration
 
