@@ -1,0 +1,31 @@
+{
+  "name": "ag-shield",
+  "version": "1.0.0",
+  "description": "Zero-dependency sanitizer proxy & live dashboard for agentic AI clients (Hermes, OpenClaw, Cline) on 9Router, Antigravity, LiteLLM, and Gemini.",
+  "main": "index.js",
+  "bin": {
+    "ag-shield": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "reverse-proxy",
+    "ai-agent",
+    "antigravity",
+    "9router",
+    "gemini",
+    "litellm",
+    "hermes-agent",
+    "openclaw",
+    "cline",
+    "sanitizer",
+    "tool-calling"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
