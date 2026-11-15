@@ -18,11 +18,46 @@ const DEFAULT_CONFIG = {
   targetPort: 20128,
   targetApiKey: '',
   targetBasePath: '',
+
+  // 1. Signature Neutralizer
   stripSignatures: true,
+  signaturePatterns: [
+    "(?:You are\\s+)?(?:Hermes Agent|hermes-agent|Nous Research Hermes|Nous Research)",
+    "(?:You are\\s+)?(?:OpenClaw|openclaw)",
+    "(?:You are\\s+)?(?:Roo Code|Roo-Cline|Cline|Aider|Cursor Agent)",
+    "https?:\\/\\/(?:docs\\.nousresearch\\.com|github\\.com\\/nousresearch|github\\.com\\/cline|github\\.com\\/openclaw)[^\\s)\"]*",
+    "#\\s*Runtime environment[\\s\\S]*?(?:<!--\\s*End runtime environment\\s*-->|(?=\\n#[A-Za-z0-9_\\s]+|\\n\\n[A-Z]|$))",
+    "User home directory:\\s*[^\\n]+",
+    "Current working directory:\\s*[^\\n]+",
+    "Scratch directory:\\s*[^\\n]+",
+    "#\\s*Operational directives",
+    "#\\s*Tool-use enforcement"
+  ],
+  signatureReplacementText: "You are a helpful AI assistant.",
+
+  // 2. Tool Schema Simplifier
   simplifyToolSchemas: true,
+  stripStrict: true,
+  stripSchemaUrl: true,
+  stripAdditionalProperties: true,
+  stripValidationBounds: true,
+  collapseAnyOf: true,
+
+  // 3. Reasoning Effort Fixer
   fixReasoningEffort: true,
+  reasoningEffortSource: 'none',
+  reasoningEffortTarget: 'low',
+
+  // 4. Local Title Mocker
   mockLocalTitles: true,
+  mockTitleText: 'New Session',
+  mockTitleKeywords: 'session\\s*title|chat\\s*title|title\\s+for\\s+this|generate\\s+(?:a\\s+)?(?:short\\s+)?title|summarize\\s+into\\s+(?:a\\s+)?(?:short\\s+)?title|create\\s+(?:a\\s+)?(?:3-5\\s+word\\s+)?title',
+
+  // 5. User-Agent Spoofing
   spoofUserAgent: true,
+  customUserAgent: 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)',
+
+  // 6. Custom text replacements
   customReplacements: []
 };
 
@@ -360,47 +395,47 @@ function getStats() {
 
 // --- Sanitization Engine ---
 
-const AGENT_SIGNATURE_PATTERNS = [
-  /(?:You are\s+)?(?:Hermes Agent|hermes-agent|Nous Research Hermes|Nous Research)/gi,
-  /(?:You are\s+)?(?:OpenClaw|openclaw)/gi,
-  /(?:You are\s+)?(?:Roo Code|Roo-Cline|Cline|Aider|Cursor Agent)/gi,
-  /https?:\/\/(?:docs\.nousresearch\.com|github\.com\/nousresearch|github\.com\/cline|github\.com\/openclaw)[^\s)"]*/gi,
-  /#\s*Runtime environment[\s\S]*?(?:<!--\s*End runtime environment\s*-->|(?=\n#[A-Za-z0-9_\s]+|\n\n[A-Z]|$))/gi,
-  /User home directory:\s*[^\n]+/gi,
-  /Current working directory:\s*[^\n]+/gi,
-  /Scratch directory:\s*[^\n]+/gi,
-  /#\s*Operational directives/gi,
-  /#\s*Tool-use enforcement/gi
-];
-
 function sanitizeText(text, customReplacements = []) {
   if (typeof text !== 'string') return { text, changed: false };
   let original = text;
   let modified = text;
 
   if (config.stripSignatures) {
-    for (const pattern of AGENT_SIGNATURE_PATTERNS) {
-      modified = modified.replace(pattern, (match) => {
-        if (/^You are\s+/i.test(match)) {
-          return 'You are a helpful AI assistant.';
-        }
-        return '';
-      });
+    const patterns = Array.isArray(config.signaturePatterns) && config.signaturePatterns.length > 0
+      ? config.signaturePatterns
+      : DEFAULT_CONFIG.signaturePatterns;
+
+    const replacementIntro = config.signatureReplacementText !== undefined
+      ? config.signatureReplacementText
+      : 'You are a helpful AI assistant.';
+
+    for (const pat of patterns) {
+      try {
+        const re = typeof pat === 'string' ? new RegExp(pat, 'gi') : pat;
+        modified = modified.replace(re, (match) => {
+          if (/^You are\s+/i.test(match)) {
+            return replacementIntro;
+          }
+          return '';
+        });
+      } catch (_) {}
     }
   }
 
-  if (Array.isArray(customReplacements)) {
-    for (const rule of customReplacements) {
-      if (rule && rule.find) {
-        try {
-          if (rule.isRegex) {
-            const re = new RegExp(rule.find, 'g');
-            modified = modified.replace(re, rule.replace || '');
-          } else {
-            modified = modified.split(rule.find).join(rule.replace || '');
-          }
-        } catch (_) {}
-      }
+  const replacements = Array.isArray(customReplacements) && customReplacements.length > 0
+    ? customReplacements
+    : (Array.isArray(config.customReplacements) ? config.customReplacements : []);
+
+  for (const rule of replacements) {
+    if (rule && rule.find) {
+      try {
+        if (rule.isRegex) {
+          const re = new RegExp(rule.find, 'g');
+          modified = modified.replace(re, rule.replace || '');
+        } else {
+          modified = modified.split(rule.find).join(rule.replace || '');
+        }
+      } catch (_) {}
     }
   }
 
@@ -413,28 +448,32 @@ function cleanJsonSchema(schema) {
 
   const clone = { ...schema };
 
-  const candidates = clone.anyOf || clone.oneOf || clone.allOf;
-  if (Array.isArray(candidates) && candidates.length > 0) {
-    delete clone.anyOf;
-    delete clone.oneOf;
-    delete clone.allOf;
+  if (config.collapseAnyOf !== false) {
+    const candidates = clone.anyOf || clone.oneOf || clone.allOf;
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      delete clone.anyOf;
+      delete clone.oneOf;
+      delete clone.allOf;
 
-    const primary = candidates.find(c => c && c.type && c.type !== 'null') || candidates[0];
-    if (primary && typeof primary === 'object') {
-      const cleanedPrimary = cleanJsonSchema(primary);
-      Object.assign(clone, cleanedPrimary);
+      const primary = candidates.find(c => c && c.type && c.type !== 'null') || candidates[0];
+      if (primary && typeof primary === 'object') {
+        const cleanedPrimary = cleanJsonSchema(primary);
+        Object.assign(clone, cleanedPrimary);
+      }
     }
   }
 
-  delete clone.$schema;
-  delete clone.additionalProperties;
-  delete clone.strict;
-  delete clone.minItems;
-  delete clone.maxItems;
-  delete clone.minimum;
-  delete clone.maximum;
-  delete clone.minLength;
-  delete clone.maxLength;
+  if (config.stripSchemaUrl !== false) delete clone.$schema;
+  if (config.stripAdditionalProperties !== false) delete clone.additionalProperties;
+  if (config.stripStrict !== false) delete clone.strict;
+  if (config.stripValidationBounds !== false) {
+    delete clone.minItems;
+    delete clone.maxItems;
+    delete clone.minimum;
+    delete clone.maximum;
+    delete clone.minLength;
+    delete clone.maxLength;
+  }
 
   if (clone.properties && typeof clone.properties === 'object') {
     const cleanedProps = {};
@@ -461,7 +500,12 @@ function isTitleGenerationRequest(body) {
       ? lastMsg.content.map(c => c.text || '').join(' ')
       : '';
 
-  const titleRegex = /(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|summarize\s+into\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i;
+  let titleRegex = /(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|summarize\s+into\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i;
+  if (config.mockTitleKeywords) {
+    try {
+      titleRegex = new RegExp(config.mockTitleKeywords, 'i');
+    } catch (_) {}
+  }
 
   if (titleRegex.test(content)) return true;
   if (maxTokens && maxTokens <= 25 && /title/i.test(content)) return true;
@@ -469,6 +513,7 @@ function isTitleGenerationRequest(body) {
 }
 
 function generateMockTitleResponse(body) {
+  const titleContent = config.mockTitleText || 'New Session';
   return {
     id: `chatcmpl-mock-title-${Date.now()}`,
     object: 'chat.completion',
@@ -479,7 +524,7 @@ function generateMockTitleResponse(body) {
         index: 0,
         message: {
           role: 'assistant',
-          content: 'New Session'
+          content: titleContent
         },
         finish_reason: 'stop'
       }
@@ -496,10 +541,19 @@ function sanitizePayload(body) {
   let changed = false;
   const changes = [];
 
-  if (config.fixReasoningEffort && body.reasoning_effort === 'none') {
-    body.reasoning_effort = 'low';
-    changed = true;
-    changes.push('Mapped reasoning_effort: "none" -> "low"');
+  const srcEffort = config.reasoningEffortSource || 'none';
+  const tgtEffort = config.reasoningEffortTarget || 'low';
+
+  if (config.fixReasoningEffort && body.reasoning_effort === srcEffort) {
+    if (tgtEffort === 'remove') {
+      delete body.reasoning_effort;
+      changed = true;
+      changes.push(`Removed reasoning_effort: "${srcEffort}"`);
+    } else {
+      body.reasoning_effort = tgtEffort;
+      changed = true;
+      changes.push(`Mapped reasoning_effort: "${srcEffort}" -> "${tgtEffort}"`);
+    }
   }
 
   if (Array.isArray(body.messages)) {
@@ -538,7 +592,7 @@ function sanitizePayload(body) {
   if (config.simplifyToolSchemas && Array.isArray(body.tools)) {
     for (const tool of body.tools) {
       if (tool.function) {
-        if (tool.function.strict !== undefined) {
+        if (config.stripStrict !== false && tool.function.strict !== undefined) {
           delete tool.function.strict;
           changed = true;
           changes.push(`Removed strict flag from tool ${tool.function.name}`);
@@ -552,7 +606,7 @@ function sanitizePayload(body) {
     }
   }
 
-  if (body.strict !== undefined) {
+  if (config.stripStrict !== false && body.strict !== undefined) {
     delete body.strict;
     changed = true;
     changes.push('Removed top-level strict flag');
@@ -835,7 +889,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (config.spoofUserAgent) {
-      proxyHeaders['user-agent'] = 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
+      proxyHeaders['user-agent'] = config.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
       delete proxyHeaders['x-hermes-version'];
       delete proxyHeaders['x-client-name'];
     }

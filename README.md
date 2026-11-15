@@ -101,7 +101,12 @@ Open **`http://127.0.0.1:20129/ui`** in your browser:
 - **Main Upstream Router (مشخصات روتر اصلی):** Select presets (9Router, LiteLLM, OpenRouter, Google Gemini) or enter custom Host, Port, Protocol, and API Key. Includes **⚡ Test Ping** button to verify upstream health live.
 - **System Boot Autostart:** Toggle silent background launch on OS startup with one click.
 - **Live KPIs:** Total requests, signatures neutralized, RPM quota saved, upstream errors trapped.
-- **Feature Toggles:** Real-time toggles for signature stripping, schema simplification, reasoning effort mapping, and user-agent spoofing.
+- **Granular Rule Customization:** Every toggle includes an expandable `⚙️ Rules` panel:
+  - **Strip Signatures:** Customize replacement intro text and edit exact regex / signature patterns to strip.
+  - **Tool Schemas:** Toggle individual schema rules: `strict: true`, `$schema`, `additionalProperties`, `min/max bounds`, and `anyOf` collapsing.
+  - **Reasoning Effort:** Configure source value (`none`) and target mapping (`low`, `medium`, `high`, or `remove`).
+  - **Local Titles:** Customize the synthetic session title text and regex trigger keywords.
+  - **User-Agent Spoofing:** Customize the User-Agent header with one-click presets (Node SDK, Python SDK, Cursor, curl).
 - **Custom Text Filters:** Add custom regex or text replacement rules.
 - **Live Traffic Inspector:** Real-time table showing latency, HTTP status, tool count, and an inspect drawer for payload debugging.
 

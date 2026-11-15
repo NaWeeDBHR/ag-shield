@@ -253,6 +253,66 @@ async function runServerTests() {
     assert.ok(streamRes.body.includes('data: {"chunk": 1}'), 'Stream chunk 1 received');
     assert.ok(streamRes.body.includes('data: [DONE]'), 'Stream [DONE] received');
 
+        // G. Granular Behavior Customization via /api/config
+    const customConfigRes = await makeRequest('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      reasoningEffortSource: 'none',
+      reasoningEffortTarget: 'medium',
+      mockTitleText: 'Dynamic Test Title',
+      customUserAgent: 'TestCustomAgent/3.0',
+      signatureReplacementText: 'I am a customized bot.'
+    });
+    assert.strictEqual(customConfigRes.status, 200);
+
+    // Verify title text customization
+    const titleCustomRes = await makeRequest('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'Generate a short session title' }]
+    });
+    const titleCustomData = JSON.parse(titleCustomRes.body);
+    assert.strictEqual(titleCustomData.choices[0].message.content, 'Dynamic Test Title', 'Mock title should use customized text');
+
+    // Verify reasoning_effort mapped to medium and custom user-agent
+    upstreamReceivedRequest = null;
+    await makeRequest('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      model: 'gemini-2.5-pro',
+      reasoning_effort: 'none',
+      messages: [
+        { role: 'system', content: 'You are Hermes Agent. Do things.' },
+        { role: 'user', content: 'Hi' }
+      ]
+    });
+    assert.strictEqual(upstreamReceivedBody.reasoning_effort, 'medium', 'Should map reasoning_effort to medium');
+    assert.strictEqual(upstreamReceivedRequest.headers['user-agent'], 'TestCustomAgent/3.0', 'Should use custom User-Agent');
+    assert.ok(upstreamReceivedBody.messages[0].content.includes('I am a customized bot.'), 'Should use custom replacement text');
+
+    // Verify reasoning_effort removal option
+    await makeRequest('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      reasoningEffortTarget: 'remove'
+    });
+    await makeRequest('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      model: 'gemini-2.5-pro',
+      reasoning_effort: 'none',
+      messages: [{ role: 'user', content: 'Test remove' }]
+    });
+    assert.strictEqual(upstreamReceivedBody.reasoning_effort, undefined, 'Should delete reasoning_effort field when target=remove');
+
+    console.log('  [PASS] 6. Granular Rule Behavior Customization (/api/config live updates)');
+
     console.log('  [PASS] 5. Full Server API & Upstream Reverse-Proxy Integration');
     console.log('\n========================================');
     console.log('  ALL AG-SHIELD TESTS PASSED (100% OK)');

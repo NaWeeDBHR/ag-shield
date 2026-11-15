@@ -192,6 +192,51 @@
       gap: 8px;
     }
 
+    /* Sub-panel rule config */
+    .btn-gear {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+    .btn-gear:hover {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #93c5fd;
+    }
+    .sub-panel {
+      display: none;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-top: 10px;
+      margin-bottom: 6px;
+    }
+    .sub-panel.active { display: block; animation: fadeIn 0.2s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+    .check-label { display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--text-muted); cursor: pointer; }
+    .check-label input { accent-color: var(--accent); }
+    .btn-save-sub {
+      background: rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #93c5fd;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.74rem;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .btn-save-sub:hover { background: rgba(59, 130, 246, 0.35); color: #fff; }
+
     /* Switch list */
     .switch-list { display: flex; flex-direction: column; gap: 14px; }
     .switch-row {
@@ -510,6 +555,7 @@
           Active Sanitization & System Rules
         </div>
         <div class="switch-list">
+          <!-- Autostart Boot -->
           <div class="switch-row" style="background:rgba(59,130,246,0.06); padding:10px; border-radius:8px; border-bottom:none;">
             <div class="switch-info">
               <div class="switch-name" style="color:#93c5fd;">🚀 Run on System Boot (Autostart)</div>
@@ -522,59 +568,152 @@
             </label>
           </div>
 
-          <div class="switch-row">
-            <div class="switch-info">
-              <div class="switch-name">Strip Agent Signatures</div>
-              <div class="switch-desc">Neutralize Hermes, OpenClaw, Cline identity & environment fingerprints</div>
+          <!-- 1. Strip Signatures -->
+          <div>
+            <div class="switch-row">
+              <div class="switch-info">
+                <div class="switch-name">Strip Agent Signatures</div>
+                <div class="switch-desc">Neutralize Hermes, OpenClaw, Cline identity & environment fingerprints</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-gear" onclick="toggleSubPanel('panel-signatures')">⚙️ Rules</button>
+                <label class="toggle">
+                  <input type="checkbox" id="cfg-stripSignatures" onchange="updateToggle('stripSignatures')">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-stripSignatures" onchange="updateToggle('stripSignatures')">
-              <span class="slider"></span>
-            </label>
+            <div class="sub-panel" id="panel-signatures">
+              <div class="form-group">
+                <label class="form-label">Replacement Intro Text</label>
+                <input type="text" class="form-input" id="cfg-signatureReplacementText" placeholder="You are a helpful AI assistant.">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Patterns to Strip (one regex / keyword per line)</label>
+                <textarea class="form-input" id="cfg-signaturePatterns" rows="5" style="font-size:0.75rem; resize:vertical;"></textarea>
+              </div>
+              <button class="btn-save-sub" onclick="saveSignatureRules()">Save Signature Rules</button>
+            </div>
           </div>
 
-          <div class="switch-row">
-            <div class="switch-info">
-              <div class="switch-name">Simplify Tool Schemas</div>
-              <div class="switch-desc">Collapse nested anyOf, strip strict:true and unsupported JSON schema rules</div>
+          <!-- 2. Tool Schemas -->
+          <div>
+            <div class="switch-row">
+              <div class="switch-info">
+                <div class="switch-name">Simplify Tool Schemas</div>
+                <div class="switch-desc">Collapse nested anyOf, strip strict:true and unsupported JSON schema rules</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-gear" onclick="toggleSubPanel('panel-tools')">⚙️ Rules</button>
+                <label class="toggle">
+                  <input type="checkbox" id="cfg-simplifyToolSchemas" onchange="updateToggle('simplifyToolSchemas')">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-simplifyToolSchemas" onchange="updateToggle('simplifyToolSchemas')">
-              <span class="slider"></span>
-            </label>
+            <div class="sub-panel" id="panel-tools">
+              <div class="form-label">Select Schema Cleanup Rules:</div>
+              <div class="check-grid">
+                <label class="check-label"><input type="checkbox" id="cfg-stripStrict" onchange="updateToolRule('stripStrict')"> Strip strict: true</label>
+                <label class="check-label"><input type="checkbox" id="cfg-stripSchemaUrl" onchange="updateToolRule('stripSchemaUrl')"> Strip $schema URL</label>
+                <label class="check-label"><input type="checkbox" id="cfg-stripAdditionalProperties" onchange="updateToolRule('stripAdditionalProperties')"> Strip additionalProperties</label>
+                <label class="check-label"><input type="checkbox" id="cfg-collapseAnyOf" onchange="updateToolRule('collapseAnyOf')"> Collapse anyOf / oneOf</label>
+                <label class="check-label" style="grid-column: span 2;"><input type="checkbox" id="cfg-stripValidationBounds" onchange="updateToolRule('stripValidationBounds')"> Strip min/max bounds (minItems, maxItems, minLength)</label>
+              </div>
+            </div>
           </div>
 
-          <div class="switch-row">
-            <div class="switch-info">
-              <div class="switch-name">Fix reasoning_effort: "none"</div>
-              <div class="switch-desc">Map "none" to "low" to prevent 400 INVALID_ARGUMENT on Gemini / OpenAI</div>
+          <!-- 3. Reasoning Effort -->
+          <div>
+            <div class="switch-row">
+              <div class="switch-info">
+                <div class="switch-name">Fix reasoning_effort: "none"</div>
+                <div class="switch-desc">Map "none" to "low" to prevent 400 INVALID_ARGUMENT on Gemini / OpenAI</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-gear" onclick="toggleSubPanel('panel-reasoning')">⚙️ Rules</button>
+                <label class="toggle">
+                  <input type="checkbox" id="cfg-fixReasoningEffort" onchange="updateToggle('fixReasoningEffort')">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-fixReasoningEffort" onchange="updateToggle('fixReasoningEffort')">
-              <span class="slider"></span>
-            </label>
+            <div class="sub-panel" id="panel-reasoning">
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                <div>
+                  <label class="form-label">When reasoning_effort is:</label>
+                  <input type="text" class="form-input" id="cfg-reasoningEffortSource" placeholder="none">
+                </div>
+                <div>
+                  <label class="form-label">Map / Change to:</label>
+                  <select class="form-select" id="cfg-reasoningEffortTarget">
+                    <option value="low">low (Recommended)</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="remove">remove (Delete field)</option>
+                  </select>
+                </div>
+              </div>
+              <button class="btn-save-sub" onclick="saveReasoningRules()">Save Reasoning Mapping</button>
+            </div>
           </div>
 
-          <div class="switch-row">
-            <div class="switch-info">
-              <div class="switch-name">Mock Local Titles (Save RPM)</div>
-              <div class="switch-desc">Instantly respond to background session_title prompts without hitting upstream API</div>
+          <!-- 4. Local Titles -->
+          <div>
+            <div class="switch-row">
+              <div class="switch-info">
+                <div class="switch-name">Mock Local Titles (Save RPM)</div>
+                <div class="switch-desc">Instantly respond to background session_title prompts without hitting upstream API</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-gear" onclick="toggleSubPanel('panel-titles')">⚙️ Rules</button>
+                <label class="toggle">
+                  <input type="checkbox" id="cfg-mockLocalTitles" onchange="updateToggle('mockLocalTitles')">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-mockLocalTitles" onchange="updateToggle('mockLocalTitles')">
-              <span class="slider"></span>
-            </label>
+            <div class="sub-panel" id="panel-titles">
+              <div class="form-group">
+                <label class="form-label">Synthetic Title Content</label>
+                <input type="text" class="form-input" id="cfg-mockTitleText" placeholder="New Session">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Trigger Keywords Regex</label>
+                <input type="text" class="form-input" id="cfg-mockTitleKeywords" placeholder="session\s*title|chat\s*title|...">
+              </div>
+              <button class="btn-save-sub" onclick="saveTitleRules()">Save Title Rules</button>
+            </div>
           </div>
 
-          <div class="switch-row">
-            <div class="switch-info">
-              <div class="switch-name">Spoof User-Agent Header</div>
-              <div class="switch-desc">Mask client User-Agent with standard OpenAI SDK header</div>
+          <!-- 5. User-Agent Spoofing -->
+          <div>
+            <div class="switch-row">
+              <div class="switch-info">
+                <div class="switch-name">Spoof User-Agent Header</div>
+                <div class="switch-desc">Mask client User-Agent with standard OpenAI SDK header</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-gear" onclick="toggleSubPanel('panel-ua')">⚙️ Rules</button>
+                <label class="toggle">
+                  <input type="checkbox" id="cfg-spoofUserAgent" onchange="updateToggle('spoofUserAgent')">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="cfg-spoofUserAgent" onchange="updateToggle('spoofUserAgent')">
-              <span class="slider"></span>
-            </label>
+            <div class="sub-panel" id="panel-ua">
+              <div class="form-group">
+                <label class="form-label">Custom User-Agent Header</label>
+                <input type="text" class="form-input" id="cfg-customUserAgent" placeholder="OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)">
+              </div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                <button class="btn-secondary" style="font-size:0.7rem;" onclick="setUAPreset('node')">OpenAI Node SDK</button>
+                <button class="btn-secondary" style="font-size:0.7rem;" onclick="setUAPreset('python')">OpenAI Python SDK</button>
+                <button class="btn-secondary" style="font-size:0.7rem;" onclick="setUAPreset('cursor')">Cursor Client</button>
+                <button class="btn-secondary" style="font-size:0.7rem;" onclick="setUAPreset('curl')">curl/8.4</button>
+              </div>
+              <button class="btn-save-sub" onclick="saveUARules()">Save User-Agent Header</button>
+            </div>
           </div>
         </div>
       </div>
@@ -840,6 +979,63 @@
       }
     }
 
+    function toggleSubPanel(id) {
+      const panel = document.getElementById(id);
+      if (!panel) return;
+      panel.classList.toggle('active');
+    }
+
+    function setUAPreset(preset) {
+      const input = document.getElementById('cfg-customUserAgent');
+      if (preset === 'node') input.value = 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
+      else if (preset === 'python') input.value = 'OpenAI/Python 1.12.0';
+      else if (preset === 'cursor') input.value = 'Cursor/0.40.0';
+      else if (preset === 'curl') input.value = 'curl/8.4.0';
+    }
+
+    async function saveSignatureRules() {
+      const replacementText = document.getElementById('cfg-signatureReplacementText').value;
+      const patternsRaw = document.getElementById('cfg-signaturePatterns').value;
+      const patterns = patternsRaw.split('\n').map(s => s.trim()).filter(Boolean);
+      await postConfig({
+        signatureReplacementText: replacementText,
+        signaturePatterns: patterns
+      });
+      showToast('Saved signature rules (' + patterns.length + ' patterns)');
+    }
+
+    async function updateToolRule(key) {
+      const val = document.getElementById('cfg-' + key).checked;
+      await postConfig({ [key]: val });
+      showToast('Tool rule ' + key + ' -> ' + val);
+    }
+
+    async function saveReasoningRules() {
+      const source = document.getElementById('cfg-reasoningEffortSource').value.trim() || 'none';
+      const target = document.getElementById('cfg-reasoningEffortTarget').value;
+      await postConfig({
+        reasoningEffortSource: source,
+        reasoningEffortTarget: target
+      });
+      showToast('Saved reasoning mapping: "' + source + '" -> "' + target + '"');
+    }
+
+    async function saveTitleRules() {
+      const titleText = document.getElementById('cfg-mockTitleText').value.trim() || 'New Session';
+      const keywords = document.getElementById('cfg-mockTitleKeywords').value.trim();
+      await postConfig({
+        mockTitleText: titleText,
+        mockTitleKeywords: keywords
+      });
+      showToast('Saved local title response rules');
+    }
+
+    async function saveUARules() {
+      const ua = document.getElementById('cfg-customUserAgent').value.trim();
+      await postConfig({ customUserAgent: ua });
+      showToast('Saved custom User-Agent header');
+    }
+
     function applyConfigToUI(cfg) {
       document.getElementById('cfg-stripSignatures').checked = !!cfg.stripSignatures;
       document.getElementById('cfg-simplifyToolSchemas').checked = !!cfg.simplifyToolSchemas;
@@ -851,6 +1047,25 @@
       document.getElementById('cfg-targetPort').value = cfg.targetPort || 20128;
       document.getElementById('cfg-targetApiKey').value = cfg.targetApiKey || '';
       document.getElementById('cfg-targetBasePath').value = cfg.targetBasePath || '';
+
+      // Detailed rule fields
+      document.getElementById('cfg-signatureReplacementText').value = cfg.signatureReplacementText || 'You are a helpful AI assistant.';
+      if (Array.isArray(cfg.signaturePatterns)) {
+        document.getElementById('cfg-signaturePatterns').value = cfg.signaturePatterns.join('\n');
+      }
+      document.getElementById('cfg-stripStrict').checked = cfg.stripStrict !== false;
+      document.getElementById('cfg-stripSchemaUrl').checked = cfg.stripSchemaUrl !== false;
+      document.getElementById('cfg-stripAdditionalProperties').checked = cfg.stripAdditionalProperties !== false;
+      document.getElementById('cfg-stripValidationBounds').checked = cfg.stripValidationBounds !== false;
+      document.getElementById('cfg-collapseAnyOf').checked = cfg.collapseAnyOf !== false;
+
+      document.getElementById('cfg-reasoningEffortSource').value = cfg.reasoningEffortSource || 'none';
+      document.getElementById('cfg-reasoningEffortTarget').value = cfg.reasoningEffortTarget || 'low';
+
+      document.getElementById('cfg-mockTitleText').value = cfg.mockTitleText || 'New Session';
+      document.getElementById('cfg-mockTitleKeywords').value = cfg.mockTitleKeywords || '';
+
+      document.getElementById('cfg-customUserAgent').value = cfg.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
 
       const port = cfg.listenPort || window.location.port || 20129;
       document.getElementById('endpoint-text').innerText = 'http://127.0.0.1:' + port + '/v1';
