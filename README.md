@@ -44,6 +44,7 @@ When running modern agentic coding frameworks with aggressive tool-calling or re
 ## ✨ Features
 
 - **Zero Dependencies:** Pure Node.js standard library (`http`, `https`, `fs`, `path`, `events`). Instant start, tiny footprint, zero vulnerabilities.
+- **Auto-Update & Versioning:** Real-time version display in Web UI and CLI. Automatically notifies when an update is released on GitHub/npm with one-click web update and CLI command (`node index.js --update`).
 - **Main Router Control Panel:** Full configuration panel in Web UI to set upstream protocol (`http`/`https`), host, port, API bearer key, and base path with presets (9Router, LiteLLM, OpenRouter, Gemini) and a real-time connectivity ping tester.
 - **System Boot Autostart:** Seamless one-click background autostart toggle on OS boot (Windows VBS Startup folder, macOS LaunchAgents plist, Linux autostart desktop entry).
 - **Agent Signature Neutralizer:** Automatically removes agent identity tags, environment paths, and system fingerprint headers while preserving the core task prompt.
@@ -77,6 +78,10 @@ node index.js 20129 20128
 
 # Custom upstream host & file logging
 node index.js --host 192.168.1.100 --target-port 8000 --log
+
+# Version & Self-Update CLI commands:
+node index.js --version            # Show current version (v1.0.0)
+node index.js --update             # Check for updates and automatically update (git/npm)
 
 # System Autostart CLI commands:
 node index.js --autostart-enable   # Register in Windows Startup / Linux systemd-user

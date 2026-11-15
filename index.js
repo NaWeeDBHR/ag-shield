@@ -7,6 +7,88 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
+const PKG_VERSION = (() => {
+  try { return require('./package.json').version; } catch (_) { return '1.0.0'; }
+})();
+
+let updateState = {
+  currentVersion: PKG_VERSION,
+  latestVersion: PKG_VERSION,
+  updateAvailable: false,
+  updateCommand: 'git pull origin main || npm install -g ag-shield@latest',
+  lastChecked: 0
+};
+
+function isNewerVersion(latest, current) {
+  const l = String(latest).split('.').map(n => parseInt(n, 10) || 0);
+  const c = String(current).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(l.length, c.length); i++) {
+    const li = l[i] || 0;
+    const ci = c[i] || 0;
+    if (li > ci) return true;
+    if (li < ci) return false;
+  }
+  return false;
+}
+
+function checkRemoteVersion(force = false) {
+  const now = Date.now();
+  if (!force && (now - updateState.lastChecked) < 3600000) {
+    return Promise.resolve(updateState);
+  }
+  return new Promise((resolve) => {
+    https.get('https://raw.githubusercontent.com/NaWeeDBHR/ag-shield/main/package.json', {
+      headers: { 'User-Agent': 'ag-shield-update-check' },
+      timeout: 5000
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const pkg = JSON.parse(data);
+          if (pkg.version) {
+            updateState.latestVersion = pkg.version;
+            updateState.updateAvailable = isNewerVersion(pkg.version, PKG_VERSION);
+            updateState.lastChecked = now;
+          }
+        } catch (_) {}
+        resolve(updateState);
+      });
+    }).on('error', () => resolve(updateState));
+  });
+}
+
+function runSelfUpdate() {
+  const isGit = fs.existsSync(path.join(__dirname, '.git'));
+  if (isGit) {
+    try {
+      const out = require('child_process').execSync('git pull origin main', {
+        cwd: __dirname,
+        encoding: 'utf8',
+        timeout: 25000
+      });
+      return { ok: true, method: 'git', output: out.trim() };
+    } catch (err) {
+      return { ok: false, method: 'git', error: err.message, command: 'git pull origin main' };
+    }
+  } else {
+    try {
+      const out = require('child_process').execSync('npm install -g ag-shield@latest', {
+        encoding: 'utf8',
+        timeout: 30000
+      });
+      return { ok: true, method: 'npm', output: out.trim() };
+    } catch (err) {
+      return {
+        ok: false,
+        method: 'manual',
+        command: 'npm install -g ag-shield@latest',
+        error: err.message
+      };
+    }
+  }
+}
+
 // --- Configuration & Persistence ---
 const CONFIG_FILE = path.join(process.cwd(), 'ag-shield.config.json');
 const UI_FILE = path.join(__dirname, 'ui.html');
@@ -254,7 +336,29 @@ let fileLogging = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === '--help' || arg === '-h') {
+  if (arg === '--version' || arg === '-v') {
+    console.log(`ag-shield v${PKG_VERSION}`);
+    process.exit(0);
+  } else if (arg === '--update') {
+    console.log(`[AG-SHIELD] Checking for updates (current: v${PKG_VERSION})...`);
+    checkRemoteVersion(true).then((info) => {
+      if (!info.updateAvailable) {
+        console.log(`[AG-SHIELD] Already on latest version (v${PKG_VERSION}).`);
+        process.exit(0);
+      }
+      console.log(`[AG-SHIELD] New version available: v${info.latestVersion}! Updating...`);
+      const res = runSelfUpdate();
+      if (res.ok) {
+        console.log(`[AG-SHIELD] Update successful:
+${res.output}`);
+      } else {
+        console.error(`[AG-SHIELD] Update failed: ${res.error || ''}
+Run manually: ${info.updateCommand}`);
+      }
+      process.exit(res.ok ? 0 : 1);
+    });
+    return;
+  } else if (arg === '--help' || arg === '-h') {
     console.log(`
 AG-SHIELD - Antigravity & Agentic AI Sanitizer Proxy
 
@@ -273,6 +377,8 @@ Flags:
   --autostart-disable   Disable auto-start on system boot
   --autostart-status    Check auto-start configuration status
   --install-systemd     Install systemd system service on Linux (/etc/systemd/system)
+  --version, -v         Show version number
+  --update              Check and install latest update from GitHub/npm
   --help, -h            Show this help message
 
 Web Dashboard:
@@ -648,11 +754,33 @@ const server = http.createServer((req, res) => {
       'Access-Control-Allow-Origin': '*'
     });
     return res.end(JSON.stringify({
+      version: PKG_VERSION,
+      updates: updateState,
       config,
       stats: getStats(),
       autostart: getAutostartInfo(),
       logs: trafficLogs
     }));
+  }
+
+  if (pathname === '/api/check-update' && (req.method === 'GET' || req.method === 'POST')) {
+    checkRemoteVersion(true).then((info) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      return res.end(JSON.stringify(info));
+    });
+    return;
+  }
+
+  if (pathname === '/api/update' && req.method === 'POST') {
+    const result = runSelfUpdate();
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(JSON.stringify(result));
   }
 
   if (pathname === '/api/autostart' && req.method === 'GET') {
@@ -1003,6 +1131,11 @@ if (require.main === module) {
 module.exports = {
   server,
   config,
+  PKG_VERSION,
+  updateState,
+  isNewerVersion,
+  checkRemoteVersion,
+  runSelfUpdate,
   stats,
   sanitizeText,
   cleanJsonSchema,

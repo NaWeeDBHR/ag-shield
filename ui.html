@@ -513,6 +513,18 @@
           <span class="pulse-dot"></span>
           <span>ONLINE</span>
         </div>
+        <div class="pill" id="version-pill" onclick="checkUpdatesManual()" style="cursor:pointer;" title="Click to check updates">v1.0.0</div>
+        <div id="update-banner" style="display:none; align-items:center; gap:6px;">
+          <span class="pill" style="border-color:rgba(245,158,11,0.4); background:rgba(245,158,11,0.12); color:#fbbf24;">
+            ⚡ Update <span id="latest-ver-text">v1.0.1</span>
+          </span>
+          <button class="btn-copy" onclick="triggerWebUpdate()" style="background:rgba(245,158,11,0.2); border-color:rgba(245,158,11,0.5); color:#fde68a;">
+            Update Now
+          </button>
+          <button class="btn-copy" onclick="copyUpdateCmd()" title="Copy CLI update command">
+            📋 Copy Cmd
+          </button>
+        </div>
         <div class="pill" id="autostart-pill">Boot: Checking...</div>
         <div class="pill" id="target-pill">Target: http://127.0.0.1:20128</div>
         <button class="btn-copy" id="copy-btn" onclick="copyEndpoint()">
@@ -877,10 +889,67 @@
       showToast('Loaded preset: ' + pKey);
     }
 
+    let updateData = {};
+
+    function handleUpdateInfo(updates, ver) {
+      if (ver) document.getElementById('version-pill').innerText = 'v' + ver;
+      updateData = updates || {};
+      const banner = document.getElementById('update-banner');
+      if (updates && updates.updateAvailable) {
+        document.getElementById('latest-ver-text').innerText = 'v' + updates.latestVersion;
+        banner.style.display = 'inline-flex';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+
+    async function checkUpdatesManual() {
+      showToast('Checking for updates...');
+      try {
+        const res = await fetch('/api/check-update', { method: 'POST' });
+        const data = await res.json();
+        handleUpdateInfo(data, data.currentVersion);
+        if (data.updateAvailable) {
+          showToast('Update available: v' + data.latestVersion);
+        } else {
+          showToast('On latest version (v' + (data.currentVersion || '1.0.0') + ')');
+        }
+      } catch (err) {
+        showToast('Update check failed: ' + err.message);
+      }
+    }
+
+    function copyUpdateCmd() {
+      const cmd = updateData.updateCommand || 'git pull origin main';
+      navigator.clipboard.writeText(cmd).then(() => {
+        showToast('Copied update command: ' + cmd);
+      });
+    }
+
+    async function triggerWebUpdate() {
+      if (!confirm('Run self-update now?')) return;
+      showToast('Updating AG-Shield...');
+      try {
+        const res = await fetch('/api/update', { method: 'POST' });
+        const result = await res.json();
+        if (result.ok) {
+          showToast('✔ Update successful! Refreshing...');
+          setTimeout(() => window.location.reload(), 1500);
+        } else {
+          alert('Update failed: ' + (result.error || result.command || 'Check permissions'));
+        }
+      } catch (err) {
+        showToast('Update error: ' + err.message);
+      }
+    }
+
     async function loadStatus() {
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
+        if (data.version || data.updates) {
+          handleUpdateInfo(data.updates, data.version);
+        }
         currentConfig = data.config || {};
         applyConfigToUI(currentConfig);
         updateKPIs(data.stats || {});

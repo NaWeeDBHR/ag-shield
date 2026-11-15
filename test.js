@@ -15,7 +15,10 @@ const {
   sanitizePayload,
   getAutostartInfo,
   setAutostart,
-  DEFAULT_CONFIG
+  DEFAULT_CONFIG,
+  PKG_VERSION,
+  isNewerVersion,
+  checkRemoteVersion
 } = require('./index');
 
 // Ensure pristine defaults regardless of on-disk config from earlier runs
@@ -108,6 +111,16 @@ console.log('Running AG-Shield comprehensive test suite...');
   console.log(`  [PASS] 4. Autostart detector (${info.platform} / ${info.type})`);
 }
 
+// 5. Test Versioning & Updater
+{
+  assert.ok(PKG_VERSION, 'PKG_VERSION must exist');
+  assert.strictEqual(isNewerVersion('1.0.1', '1.0.0'), true, '1.0.1 should be newer than 1.0.0');
+  assert.strictEqual(isNewerVersion('1.1.0', '1.0.9'), true, '1.1.0 should be newer than 1.0.9');
+  assert.strictEqual(isNewerVersion('1.0.0', '1.0.0'), false, 'Identical version is not newer');
+  assert.strictEqual(isNewerVersion('0.9.9', '1.0.0'), false, 'Older version is not newer');
+  console.log(`  [PASS] 5. Version comparison & semver checker (current: v${PKG_VERSION})`);
+}
+
 // 5. Test Server HTTP Endpoints & Live Upstream Proxying
 const PROXY_PORT = 29998;
 const UPSTREAM_PORT = 29997;
@@ -190,9 +203,17 @@ async function runServerTests() {
     const statusRes = await makeRequest('/api/status');
     assert.strictEqual(statusRes.status, 200, '/api/status should return 200');
     const statusData = JSON.parse(statusRes.body);
+    assert.ok(statusData.version, 'Status should contain version');
+    assert.ok(statusData.updates, 'Status should contain updates object');
     assert.ok(statusData.config, 'Status should contain config');
     assert.ok(statusData.stats, 'Status should contain stats');
     assert.ok(statusData.autostart, 'Status should contain autostart');
+
+    // Test /api/check-update
+    const updateCheckRes = await makeRequest('/api/check-update');
+    assert.strictEqual(updateCheckRes.status, 200, '/api/check-update should return 200');
+    const updateCheckData = JSON.parse(updateCheckRes.body);
+    assert.ok(updateCheckData.currentVersion, 'Check update should return currentVersion');
 
     // C. Autostart Route
     const autoRes = await makeRequest('/api/autostart');
