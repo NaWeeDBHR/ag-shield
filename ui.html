@@ -1105,22 +1105,30 @@
       showToast('Saved custom User-Agent header');
     }
 
+    function setSafeValue(id, val) {
+      const el = document.getElementById(id);
+      if (el && document.activeElement !== el) {
+        el.value = val !== undefined ? val : '';
+      }
+    }
+
     function applyConfigToUI(cfg) {
+      if (!cfg) return;
       document.getElementById('cfg-stripSignatures').checked = !!cfg.stripSignatures;
       document.getElementById('cfg-simplifyToolSchemas').checked = !!cfg.simplifyToolSchemas;
       document.getElementById('cfg-fixReasoningEffort').checked = !!cfg.fixReasoningEffort;
       document.getElementById('cfg-mockLocalTitles').checked = !!cfg.mockLocalTitles;
       document.getElementById('cfg-spoofUserAgent').checked = !!cfg.spoofUserAgent;
-      document.getElementById('cfg-targetProtocol').value = cfg.targetProtocol || 'http';
-      document.getElementById('cfg-targetHost').value = cfg.targetHost || '127.0.0.1';
-      document.getElementById('cfg-targetPort').value = cfg.targetPort || 20128;
-      document.getElementById('cfg-targetApiKey').value = cfg.targetApiKey || '';
-      document.getElementById('cfg-targetBasePath').value = cfg.targetBasePath || '';
+      
+      setSafeValue('cfg-targetProtocol', cfg.targetProtocol || 'http');
+      setSafeValue('cfg-targetHost', cfg.targetHost || '127.0.0.1');
+      setSafeValue('cfg-targetPort', cfg.targetPort || 20128);
+      setSafeValue('cfg-targetApiKey', cfg.targetApiKey || '');
+      setSafeValue('cfg-targetBasePath', cfg.targetBasePath || '');
 
-      // Detailed rule fields
-      document.getElementById('cfg-signatureReplacementText').value = cfg.signatureReplacementText || 'You are a helpful AI assistant.';
+      setSafeValue('cfg-signatureReplacementText', cfg.signatureReplacementText || 'You are a helpful AI assistant.');
       if (Array.isArray(cfg.signaturePatterns)) {
-        document.getElementById('cfg-signaturePatterns').value = cfg.signaturePatterns.join('\n');
+        setSafeValue('cfg-signaturePatterns', cfg.signaturePatterns.join('\n'));
       }
       document.getElementById('cfg-stripStrict').checked = cfg.stripStrict !== false;
       document.getElementById('cfg-stripSchemaUrl').checked = cfg.stripSchemaUrl !== false;
@@ -1128,13 +1136,13 @@
       document.getElementById('cfg-stripValidationBounds').checked = cfg.stripValidationBounds !== false;
       document.getElementById('cfg-collapseAnyOf').checked = cfg.collapseAnyOf !== false;
 
-      document.getElementById('cfg-reasoningEffortSource').value = cfg.reasoningEffortSource || 'none';
-      document.getElementById('cfg-reasoningEffortTarget').value = cfg.reasoningEffortTarget || 'low';
+      setSafeValue('cfg-reasoningEffortSource', cfg.reasoningEffortSource || 'none');
+      setSafeValue('cfg-reasoningEffortTarget', cfg.reasoningEffortTarget || 'low');
 
-      document.getElementById('cfg-mockTitleText').value = cfg.mockTitleText || 'New Session';
-      document.getElementById('cfg-mockTitleKeywords').value = cfg.mockTitleKeywords || '';
+      setSafeValue('cfg-mockTitleText', cfg.mockTitleText || 'New Session');
+      setSafeValue('cfg-mockTitleKeywords', cfg.mockTitleKeywords || '');
 
-      document.getElementById('cfg-customUserAgent').value = cfg.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
+      setSafeValue('cfg-customUserAgent', cfg.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)');
 
       const port = cfg.listenPort || window.location.port || 20129;
       document.getElementById('endpoint-text').innerText = 'http://127.0.0.1:' + port + '/v1';
@@ -1269,6 +1277,7 @@
             <td style="font-family:var(--mono);">
               <strong>${log.method}</strong> ${escapeHtml(log.path)}
               ${log.sanitized ? '<span class="tag-sanitized">SANITIZED</span>' : ''}
+              ${log.status >= 400 && log.snippet ? `<div style="font-size:0.71rem; color:#f87171; margin-top:2px; font-weight:500;">⚠️ ${escapeHtml(log.snippet)}</div>` : ''}
             </td>
             <td style="font-family:var(--mono);color:#93c5fd;">${escapeHtml(log.model || '—')}</td>
             <td style="font-family:var(--mono);">${log.toolCount > 0 ? log.toolCount + ' tools' : '—'}</td>
@@ -1311,9 +1320,14 @@
       })[m]);
     }
 
+    let eventSource = null;
+
     function initSSE() {
-      const source = new EventSource('/api/events');
-      source.onmessage = (e) => {
+      if (eventSource) {
+        try { eventSource.close(); } catch (_) {}
+      }
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = (e) => {
         try {
           const ev = JSON.parse(e.data);
           if (ev.type === 'log') {
@@ -1322,19 +1336,26 @@
             renderTraffic();
           } else if (ev.type === 'stats') {
             updateKPIs(ev.data);
+          } else if (ev.type === 'config') {
+            currentConfig = ev.data;
+            applyConfigToUI(ev.data);
+          } else if (ev.type === 'autostart') {
+            updateAutostartUI(ev.data);
           }
         } catch (err) {
           console.error(err);
         }
       };
-      source.onerror = () => {
-        setTimeout(loadStatus, 5000);
+      eventSource.onerror = () => {
+        setTimeout(initSSE, 4000);
       };
     }
 
     window.addEventListener('DOMContentLoaded', () => {
       loadStatus();
       initSSE();
+      // Automatic live polling every 2.5 seconds (zero refresh required)
+      setInterval(loadStatus, 2500);
     });
   </script>
 </body>

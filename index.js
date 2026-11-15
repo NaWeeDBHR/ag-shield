@@ -464,11 +464,8 @@ const trafficLogs = [];
 const eventBus = new EventEmitter();
 const sseClients = new Set();
 
-function logTraffic(entry) {
-  trafficLogs.unshift(entry);
-  if (trafficLogs.length > MAX_LOGS) trafficLogs.pop();
-
-  const payload = `data: ${JSON.stringify({ type: 'log', data: entry })}\n\n`;
+function broadcastSSE(type, data) {
+  const payload = `data: ${JSON.stringify({ type, data })}\n\n`;
   for (const client of sseClients) {
     try {
       client.write(payload);
@@ -476,15 +473,21 @@ function logTraffic(entry) {
       sseClients.delete(client);
     }
   }
+}
 
-  const statsPayload = `data: ${JSON.stringify({ type: 'stats', data: getStats() })}\n\n`;
+// Keep-alive heartbeat every 10s to prevent connection dropouts
+setInterval(() => {
   for (const client of sseClients) {
-    try {
-      client.write(statsPayload);
-    } catch (_) {
-      sseClients.delete(client);
-    }
+    try { client.write(': keepalive\n\n'); } catch (_) { sseClients.delete(client); }
   }
+}, 10000);
+
+function logTraffic(entry) {
+  trafficLogs.unshift(entry);
+  if (trafficLogs.length > MAX_LOGS) trafficLogs.pop();
+
+  broadcastSSE('log', entry);
+  broadcastSSE('stats', getStats());
 
   if (fileLogging) {
     const line = `[${entry.timestamp}] ${entry.method} ${entry.path} - ${entry.status} (${entry.latencyMs}ms) - Model: ${entry.model || 'N/A'}\n`;
@@ -1045,14 +1048,27 @@ const server = http.createServer((req, res) => {
       respHeaders['access-control-allow-origin'] = '*';
       res.writeHead(proxyRes.statusCode, respHeaders);
 
-      proxyRes.on('data', chunk => res.write(chunk));
+      let errSnippet = '';
+      proxyRes.on('data', chunk => {
+        res.write(chunk);
+        if (proxyRes.statusCode >= 400 && errSnippet.length < 512) {
+          errSnippet += chunk.toString('utf8');
+        }
+      });
       proxyRes.on('end', () => {
         res.end();
         const latencyMs = Date.now() - startTime;
         const status = proxyRes.statusCode;
 
+        let errorReason = '';
         if (status >= 400) {
           stats.errorCount++;
+          try {
+            const errObj = JSON.parse(errSnippet);
+            errorReason = (errObj.error && errObj.error.message) || errObj.message || errObj.error || '';
+          } catch (_) {
+            errorReason = errSnippet.slice(0, 120).trim();
+          }
         }
 
         logTraffic({
@@ -1065,8 +1081,10 @@ const server = http.createServer((req, res) => {
           status,
           latencyMs,
           sanitized,
-          snippet: `Proxied to ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}`,
-          details: { changes, model, status }
+          snippet: errorReason
+            ? `${status} upstream: ${errorReason}`
+            : `Proxied to ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}`,
+          details: { changes, model, status, errorReason, responsePreview: errSnippet.slice(0, 300) }
         });
       });
     });
