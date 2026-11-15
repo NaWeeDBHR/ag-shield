@@ -79,9 +79,10 @@ node index.js 20129 20128
 # Custom upstream host & file logging
 node index.js --host 192.168.1.100 --target-port 8000 --log
 
-# Version & Self-Update CLI commands:
-node index.js --version            # Show current version (v1.0.0)
-node index.js --update             # Check for updates and automatically update (git/npm)
+# Status, Version & Update CLI commands:
+ag-shield status                   # Show live status table, uptime, URLs, and stats
+ag-shield --version                # Show current version (v1.0.0)
+ag-shield --update                 # Check for updates and automatically update (git/npm)
 
 # System Autostart CLI commands:
 node index.js --autostart-enable   # Register in Windows Startup / Linux systemd-user

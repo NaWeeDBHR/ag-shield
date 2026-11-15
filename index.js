@@ -330,13 +330,93 @@ X-GNOME-Autostart-enabled=true
   }
 }
 
+function formatUptime(seconds) {
+  if (!seconds || seconds < 60) return `${seconds || 0}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return `${h}h ${remM}m`;
+}
+
+function printCliStatus(port) {
+  const req = http.get({
+    hostname: '127.0.0.1',
+    port: port,
+    path: '/api/status',
+    timeout: 2500
+  }, (res) => {
+    let data = '';
+    res.on('data', c => { data += c; });
+    res.on('end', () => {
+      try {
+        const info = JSON.parse(data);
+        const cfg = info.config || {};
+        const stats = info.stats || {};
+        const auto = info.autostart || {};
+        const uptimeStr = formatUptime(stats.uptime);
+
+        console.log(`
+┌────────────────────────────────────────────────────────┐
+│  AG-SHIELD Status: [RUNNING]                           │
+├────────────────────────────────────────────────────────┤
+│  Version:    v${info.version || '1.0.0'}
+│  Proxy URL:  http://127.0.0.1:${cfg.listenPort || port}/v1
+│  Dashboard:  http://127.0.0.1:${cfg.listenPort || port}/ui
+│  Upstream:   ${cfg.targetProtocol || 'http'}://${cfg.targetHost || '127.0.0.1'}:${cfg.targetPort || 20128}
+│  Uptime:     ${uptimeStr}
+│  Autostart:  ${auto.enabled ? 'ENABLED' : 'DISABLED'} (${auto.platform || process.platform})
+├────────────────────────────────────────────────────────┤
+│  Traffic Stats:                                        │
+│    • Total Requests:       ${stats.totalRequests || 0}
+│    • Signatures Stripped:  ${stats.sanitizedCount || 0}
+│    • Title Quota Saved:    ${stats.savedTitleCalls || 0}
+│    • Upstream Errors:      ${stats.errorCount || 0}
+└────────────────────────────────────────────────────────┘`);
+        process.exit(0);
+      } catch (err) {
+        console.error('[AG-SHIELD] Failed to parse status response:', err.message);
+        process.exit(1);
+      }
+    });
+  });
+
+  req.on('error', () => {
+    const auto = getAutostartInfo();
+    console.log(`
+┌────────────────────────────────────────────────────────┐
+│  AG-SHIELD Status: [STOPPED]                           │
+├────────────────────────────────────────────────────────┤
+│  Service is not running on port ${port}.               │
+│  Autostart: ${auto.enabled ? 'ENABLED' : 'DISABLED'} (${auto.platform})
+│                                                        │
+│  To start:                                             │
+│    Windows: cscript //NoLogo "${auto.path}"            │
+│    Linux:   sudo systemctl start ag-shield             │
+│    Foreground: ag-shield                               │
+└────────────────────────────────────────────────────────┘`);
+    process.exit(1);
+  });
+
+  req.on('timeout', () => {
+    req.destroy();
+    console.log(`[AG-SHIELD] Timeout connecting to port ${port}. Service might be frozen.`);
+    process.exit(1);
+  });
+}
+
 // CLI args parsing
 const args = process.argv.slice(2);
 let fileLogging = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === '--version' || arg === '-v') {
+  if (arg === 'status' || arg === '--status') {
+    const port = config.listenPort || 20129;
+    printCliStatus(port);
+    return;
+  } else if (arg === '--version' || arg === '-v') {
     console.log(`ag-shield v${PKG_VERSION}`);
     process.exit(0);
   } else if (arg === '--update') {
@@ -377,6 +457,7 @@ Flags:
   --autostart-disable   Disable auto-start on system boot
   --autostart-status    Check auto-start configuration status
   --install-systemd     Install systemd system service on Linux (/etc/systemd/system)
+  status, --status      Show live service status, uptime, proxy URL, and stats
   --version, -v         Show version number
   --update              Check and install latest update from GitHub/npm
   --help, -h            Show this help message
