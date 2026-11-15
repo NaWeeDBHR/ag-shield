@@ -716,7 +716,7 @@
             <div class="sub-panel" id="panel-ua">
               <div class="form-group">
                 <label class="form-label">Custom User-Agent Header</label>
-                <input type="text" class="form-input" id="cfg-customUserAgent" placeholder="OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)">
+                <input type="text" class="form-input" id="cfg-customUserAgent" placeholder="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36">
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
                 <button class="btn-secondary" style="font-size:0.7rem;" onclick="setUAPreset('node')">OpenAI Node SDK</button>
@@ -1142,7 +1142,7 @@
       setSafeValue('cfg-mockTitleText', cfg.mockTitleText || 'New Session');
       setSafeValue('cfg-mockTitleKeywords', cfg.mockTitleKeywords || '');
 
-      setSafeValue('cfg-customUserAgent', cfg.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)');
+      setSafeValue('cfg-customUserAgent', cfg.customUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
       const port = cfg.listenPort || window.location.port || 20129;
       document.getElementById('endpoint-text').innerText = 'http://127.0.0.1:' + port + '/v1';

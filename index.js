@@ -103,27 +103,10 @@ const DEFAULT_CONFIG = {
 
   // 1. Signature Neutralizer
   stripSignatures: true,
-  signaturePatterns: [
-    "(?:You are\\s+)?(?:Hermes Agent|hermes-agent|Nous Research Hermes|Nous Research)",
-    "(?:You are\\s+)?(?:OpenClaw|openclaw)",
-    "(?:You are\\s+)?(?:Roo Code|Roo-Cline|Cline|Aider|Cursor Agent)",
-    "https?:\\/\\/(?:docs\\.nousresearch\\.com|github\\.com\\/nousresearch|github\\.com\\/cline|github\\.com\\/openclaw)[^\\s)\"]*",
-    "#\\s*Runtime environment[\\s\\S]*?(?:<!--\\s*End runtime environment\\s*-->|(?=\\n#[A-Za-z0-9_\\s]+|\\n\\n[A-Z]|$))",
-    "User home directory:\\s*[^\\n]+",
-    "Current working directory:\\s*[^\\n]+",
-    "Scratch directory:\\s*[^\\n]+",
-    "#\\s*Operational directives",
-    "#\\s*Tool-use enforcement"
-  ],
-  signatureReplacementText: "You are a helpful AI assistant.",
 
   // 2. Tool Schema Simplifier
   simplifyToolSchemas: true,
-  stripStrict: true,
-  stripSchemaUrl: true,
-  stripAdditionalProperties: true,
-  stripValidationBounds: true,
-  collapseAnyOf: true,
+  noTools: false,
 
   // 3. Reasoning Effort Fixer
   fixReasoningEffort: true,
@@ -132,12 +115,10 @@ const DEFAULT_CONFIG = {
 
   // 4. Local Title Mocker
   mockLocalTitles: true,
-  mockTitleText: 'New Session',
-  mockTitleKeywords: 'session\\s*title|chat\\s*title|title\\s+for\\s+this|generate\\s+(?:a\\s+)?(?:short\\s+)?title|summarize\\s+into\\s+(?:a\\s+)?(?:short\\s+)?title|create\\s+(?:a\\s+)?(?:3-5\\s+word\\s+)?title',
 
   // 5. User-Agent Spoofing
   spoofUserAgent: true,
-  customUserAgent: 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)',
+  customUserAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 
   // 6. Custom text replacements
   customReplacements: []
@@ -150,6 +131,9 @@ function loadConfig() {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
       const parsed = JSON.parse(raw);
+      if (parsed.customUserAgent && parsed.customUserAgent.startsWith('OpenAI/NodeJS')) {
+        parsed.customUserAgent = DEFAULT_CONFIG.customUserAgent;
+      }
       config = { ...DEFAULT_CONFIG, ...parsed };
     } else {
       saveConfig();
@@ -366,6 +350,31 @@ process.on('exit', stopWindowsTray);
 process.on('SIGINT', () => { stopWindowsTray(); process.exit(0); });
 process.on('SIGTERM', () => { stopWindowsTray(); process.exit(0); });
 
+function killProcessOnPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const out = require('child_process').execSync(
+        `powershell.exe -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim();
+      const pids = out.split(/\r?\n/).map(s => parseInt(s.trim(), 10)).filter(p => p > 0 && p !== process.pid);
+      for (const pid of pids) {
+        try { process.kill(pid); } catch (_) {}
+      }
+      return pids;
+    } else {
+      const out = require('child_process').execSync(`lsof -ti :${port}`, { encoding: 'utf8', timeout: 5000 }).trim();
+      const pids = out.split(/\s+/).map(s => parseInt(s.trim(), 10)).filter(p => p > 0 && p !== process.pid);
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+      }
+      return pids;
+    }
+  } catch (_) {
+    return [];
+  }
+}
+
 function formatUptime(seconds) {
   if (!seconds || seconds < 60) return `${seconds || 0}s`;
   const m = Math.floor(seconds / 60);
@@ -448,7 +457,23 @@ let fileLogging = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === 'status' || arg === '--status') {
+  if (arg === 'stop' || arg === '--stop') {
+    const port = config.listenPort || 20129;
+    const killed = killProcessOnPort(port);
+    if (killed.length > 0) {
+      console.log(`[AG-SHIELD] Stopped running process(es) on port ${port}: PID ${killed.join(', ')}`);
+    } else {
+      console.log(`[AG-SHIELD] No running process found on port ${port}.`);
+    }
+    process.exit(0);
+  } else if (arg === 'restart' || arg === '--restart') {
+    const port = config.listenPort || 20129;
+    const killed = killProcessOnPort(port);
+    if (killed.length > 0) {
+      console.log(`[AG-SHIELD] Stopped previous process(es): PID ${killed.join(', ')}`);
+    }
+    console.log(`[AG-SHIELD] Starting AG-Shield on port ${port}...`);
+  } else if (arg === 'status' || arg === '--status') {
     const port = config.listenPort || 20129;
     printCliStatus(port);
     return;
@@ -495,6 +520,8 @@ Flags:
   --autostart-status    Check auto-start configuration status
   --install-systemd     Install systemd system service on Linux (/etc/systemd/system)
   status, --status      Show live service status, uptime, proxy URL, and stats
+  stop, --stop          Stop any running AG-Shield instance occupying the port
+  restart, --restart    Restart the service (kills previous process and starts)
   --version, -v         Show version number
   --update              Check and install latest update from GitHub/npm
   --help, -h            Show this help message
@@ -537,6 +564,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now ag-shield
   } else if (arg === '--log' || arg === '-l') {
     fileLogging = true;
   } else if (arg === '--no-tools') {
+    config.noTools = true;
     config.simplifyToolSchemas = false;
   } else if (arg === '--no-local-title') {
     config.mockLocalTitles = false;
@@ -622,32 +650,28 @@ function getStats() {
 
 // --- Sanitization Engine ---
 
-function sanitizeText(text, customReplacements = []) {
-  if (typeof text !== 'string') return { text, changed: false };
-  let original = text;
-  let modified = text;
+const LOG_FILE = path.join(__dirname, 'hermes-traffic.log');
 
-  if (config.stripSignatures) {
-    const patterns = Array.isArray(config.signaturePatterns) && config.signaturePatterns.length > 0
-      ? config.signaturePatterns
-      : DEFAULT_CONFIG.signaturePatterns;
+function writeLog(text) {
+  try {
+    fs.appendFileSync(LOG_FILE, text + '\n', 'utf8');
+  } catch (_) {}
+}
 
-    const replacementIntro = config.signatureReplacementText !== undefined
-      ? config.signatureReplacementText
-      : 'You are a helpful AI assistant.';
-
-    for (const pat of patterns) {
-      try {
-        const re = typeof pat === 'string' ? new RegExp(pat, 'gi') : pat;
-        modified = modified.replace(re, (match) => {
-          if (/^You are\s+/i.test(match)) {
-            return replacementIntro;
-          }
-          return '';
-        });
-      } catch (_) {}
-    }
-  }
+function cleanTextSignature(text, customReplacements = []) {
+  if (typeof text !== 'string') return text;
+  let res = text
+    .replace(/You are a personal assistant running inside OpenClaw\./gi, 'You are a personal assistant.')
+    .replace(/For help with Hermes Agent itself/gi, 'For help with the agent itself')
+    .replace(/https:\/\/hermes-agent\.nousresearch\.com\/docs/gi, 'the official documentation')
+    .replace(/Hermes delivers their message/gi, 'the runtime delivers their message')
+    .replace(/You are chatting inside the Hermes desktop app, a graphical chat surface\./gi,
+      'You are chatting inside a graphical desktop chat surface.')
+    .replace(/# Hermes runtime environment/gi, '# Runtime environment')
+    .replace(/<!-- End Hermes runtime environment -->/gi, '<!-- End runtime environment -->')
+    // Mask additional dynamic sections seen in real Hermes requests
+    .replace(/# Google model operational directives/gi, '# Operational directives')
+    .replace(/never via Hermes bot/gi, 'never via the assistant bot');
 
   const replacements = Array.isArray(customReplacements) && customReplacements.length > 0
     ? customReplacements
@@ -657,101 +681,97 @@ function sanitizeText(text, customReplacements = []) {
     if (rule && rule.find) {
       try {
         if (rule.isRegex) {
-          const re = new RegExp(rule.find, 'g');
-          modified = modified.replace(re, rule.replace || '');
+          res = res.replace(new RegExp(rule.find, 'g'), rule.replace || '');
         } else {
-          modified = modified.split(rule.find).join(rule.replace || '');
+          res = res.split(rule.find).join(rule.replace || '');
         }
       } catch (_) {}
     }
   }
 
-  return { text: modified, changed: modified !== original };
+  return res;
 }
 
-function cleanJsonSchema(schema) {
+// Simplify complex JSON schemas (anyOf, additionalProperties, etc.) that trigger Antigravity 429/400
+function simplifySchema(schema) {
   if (!schema || typeof schema !== 'object') return schema;
-  if (Array.isArray(schema)) return schema.map(cleanJsonSchema);
+  const copy = Array.isArray(schema) ? [...schema] : { ...schema };
 
-  const clone = { ...schema };
+  delete copy.$schema;
+  delete copy.strict;
+  delete copy.additionalProperties;
+  delete copy.minItems;
+  delete copy.maxItems;
+  delete copy.minimum;
+  delete copy.maximum;
 
-  if (config.collapseAnyOf !== false) {
-    const candidates = clone.anyOf || clone.oneOf || clone.allOf;
-    if (Array.isArray(candidates) && candidates.length > 0) {
-      delete clone.anyOf;
-      delete clone.oneOf;
-      delete clone.allOf;
+  if (copy.anyOf) {
+    // Collapse anyOf into a generic string/object type for Antigravity compatibility
+    delete copy.anyOf;
+    if (!copy.type) copy.type = 'string';
+  }
 
-      const primary = candidates.find(c => c && c.type && c.type !== 'null') || candidates[0];
-      if (primary && typeof primary === 'object') {
-        const cleanedPrimary = cleanJsonSchema(primary);
-        Object.assign(clone, cleanedPrimary);
-      }
+  if (copy.properties && typeof copy.properties === 'object') {
+    const newProps = {};
+    for (const [k, v] of Object.entries(copy.properties)) {
+      newProps[k] = simplifySchema(v);
     }
+    copy.properties = newProps;
   }
 
-  if (config.stripSchemaUrl !== false) delete clone.$schema;
-  if (config.stripAdditionalProperties !== false) delete clone.additionalProperties;
-  if (config.stripStrict !== false) delete clone.strict;
-  if (config.stripValidationBounds !== false) {
-    delete clone.minItems;
-    delete clone.maxItems;
-    delete clone.minimum;
-    delete clone.maximum;
-    delete clone.minLength;
-    delete clone.maxLength;
+  if (copy.items) {
+    copy.items = simplifySchema(copy.items);
   }
 
-  if (clone.properties && typeof clone.properties === 'object') {
-    const cleanedProps = {};
-    for (const [key, prop] of Object.entries(clone.properties)) {
-      cleanedProps[key] = cleanJsonSchema(prop);
-    }
-    clone.properties = cleanedProps;
-  }
-
-  if (clone.items) {
-    clone.items = cleanJsonSchema(clone.items);
-  }
-
-  return clone;
+  return copy;
 }
 
 function isTitleGenerationRequest(body) {
   if (!body || !Array.isArray(body.messages) || body.messages.length === 0) return false;
+  const sysMsg = body.messages.find(m => m.role === 'system');
+  if (sysMsg && typeof sysMsg.content === 'string' && sysMsg.content.startsWith('You name chat sessions.')) {
+    return true;
+  }
   const maxTokens = body.max_tokens || body.max_completion_tokens;
   const lastMsg = body.messages[body.messages.length - 1];
-  const content = typeof lastMsg.content === 'string'
+  const content = typeof lastMsg?.content === 'string'
     ? lastMsg.content
-    : Array.isArray(lastMsg.content)
-      ? lastMsg.content.map(c => c.text || '').join(' ')
-      : '';
+    : Array.isArray(lastMsg?.content) ? lastMsg.content.map(c => c.text || '').join(' ') : '';
 
-  let titleRegex = /(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|summarize\s+into\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i;
-  if (config.mockTitleKeywords) {
-    try {
-      titleRegex = new RegExp(config.mockTitleKeywords, 'i');
-    } catch (_) {}
+  if (/(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i.test(content)) {
+    return true;
   }
-
-  if (titleRegex.test(content)) return true;
   if (maxTokens && maxTokens <= 25 && /title/i.test(content)) return true;
   return false;
 }
 
-function generateMockTitleResponse(body) {
-  const titleContent = config.mockTitleText || 'New Session';
+function generateMockTitleResponse(titleOrBody, model = 'gemini-3.8-flash-n') {
+  let title = 'New Chat';
+  let targetModel = model;
+
+  if (typeof titleOrBody === 'string') {
+    title = titleOrBody;
+  } else if (titleOrBody && typeof titleOrBody === 'object') {
+    if (titleOrBody.model) targetModel = titleOrBody.model;
+    if (Array.isArray(titleOrBody.messages)) {
+      const uMsg = titleOrBody.messages.find(m => m.role === 'user');
+      if (uMsg && typeof uMsg.content === 'string') {
+        title = uMsg.content.trim().split('\n')[0].slice(0, 35) || 'New Chat';
+      }
+    }
+  }
+
   return {
-    id: `chatcmpl-mock-title-${Date.now()}`,
+    id: 'chatcmpl-local-title',
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
-    model: body.model || 'ag-shield-local',
+    model: targetModel,
     choices: [
       {
         index: 0,
         message: {
           role: 'assistant',
-          content: titleContent
+          content: JSON.stringify({ title })
         },
         finish_reason: 'stop'
       }
@@ -764,97 +784,154 @@ function generateMockTitleResponse(body) {
   };
 }
 
-function sanitizePayload(body) {
+function sanitizePayload(rawBody, headers = {}, options = config) {
+  let modifiedHeaders = { ...headers };
+  let modifiedBody = typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody);
+  let isTitleRequest = false;
+  let userTextForTitle = 'New Chat';
   let changed = false;
   const changes = [];
 
-  const srcEffort = config.reasoningEffortSource || 'none';
-  const tgtEffort = config.reasoningEffortTarget || 'low';
-
-  if (config.fixReasoningEffort && body.reasoning_effort === srcEffort) {
-    if (tgtEffort === 'remove') {
-      delete body.reasoning_effort;
-      changed = true;
-      changes.push(`Removed reasoning_effort: "${srcEffort}"`);
-    } else {
-      body.reasoning_effort = tgtEffort;
-      changed = true;
-      changes.push(`Mapped reasoning_effort: "${srcEffort}" -> "${tgtEffort}"`);
-    }
+  const shouldSpoofUA = options.spoofUserAgent !== false;
+  if (shouldSpoofUA) {
+    modifiedHeaders['user-agent'] = options.customUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+    delete modifiedHeaders['x-title'];
+    delete modifiedHeaders['http-referer'];
+    delete modifiedHeaders['x-hermes-version'];
+    delete modifiedHeaders['x-client-name'];
   }
 
-  if (Array.isArray(body.messages)) {
-    for (const msg of body.messages) {
-      if (typeof msg.content === 'string') {
-        const { text, changed: textChanged } = sanitizeText(msg.content, config.customReplacements);
-        if (textChanged) {
-          msg.content = text;
-          changed = true;
-          changes.push(`Sanitized message role=${msg.role}`);
-        }
-      } else if (Array.isArray(msg.content)) {
-        for (const part of msg.content) {
-          if (part && typeof part.text === 'string') {
-            const { text, changed: textChanged } = sanitizeText(part.text, config.customReplacements);
-            if (textChanged) {
-              part.text = text;
-              changed = true;
-              changes.push(`Sanitized multipart message role=${msg.role}`);
+  const noTools = options.noTools || false;
+
+  try {
+    const json = JSON.parse(modifiedBody);
+
+    if (options.fixReasoningEffort !== false && json.reasoning_effort === (options.reasoningEffortSource || 'none')) {
+      const tgt = options.reasoningEffortTarget || 'low';
+      if (tgt === 'remove') {
+        delete json.reasoning_effort;
+      } else {
+        json.reasoning_effort = tgt;
+      }
+      changed = true;
+      changes.push(`reasoning_effort -> ${tgt}`);
+    }
+
+    if (Array.isArray(json.messages)) {
+      if (options.mockLocalTitles !== false) {
+        const sysMsg = json.messages.find(m => m.role === 'system');
+        if (sysMsg && typeof sysMsg.content === 'string' && sysMsg.content.startsWith('You name chat sessions.')) {
+          isTitleRequest = true;
+          const uMsg = json.messages.find(m => m.role === 'user');
+          if (uMsg && typeof uMsg.content === 'string') {
+            userTextForTitle = uMsg.content.trim().split('\n')[0].slice(0, 35) || 'New Chat';
+          }
+        } else {
+          const lastMsg = json.messages[json.messages.length - 1];
+          const lastContent = typeof lastMsg?.content === 'string'
+            ? lastMsg.content
+            : Array.isArray(lastMsg?.content) ? lastMsg.content.map(c => c.text || '').join(' ') : '';
+          if (/(?:session\s*title|chat\s*title|title\s+for\s+this|generate\s+(?:a\s+)?(?:short\s+)?title|create\s+(?:a\s+)?(?:3-5\s+word\s+)?title)/i.test(lastContent)) {
+            isTitleRequest = true;
+            const firstUser = json.messages.find(m => m.role === 'user');
+            if (firstUser && typeof firstUser.content === 'string') {
+              userTextForTitle = firstUser.content.trim().split('\n')[0].slice(0, 35) || 'New Chat';
             }
           }
         }
       }
-    }
-  }
 
-  if (typeof body.system === 'string') {
-    const { text, changed: textChanged } = sanitizeText(body.system, config.customReplacements);
-    if (textChanged) {
-      body.system = text;
-      changed = true;
-      changes.push('Sanitized top-level system prompt');
-    }
-  }
-
-  if (config.simplifyToolSchemas && Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      if (tool.function) {
-        if (config.stripStrict !== false && tool.function.strict !== undefined) {
-          delete tool.function.strict;
-          changed = true;
-          changes.push(`Removed strict flag from tool ${tool.function.name}`);
-        }
-        if (tool.function.parameters) {
-          tool.function.parameters = cleanJsonSchema(tool.function.parameters);
-          changed = true;
-          changes.push(`Cleaned schema for tool ${tool.function.name}`);
-        }
+      if (options.stripSignatures !== false) {
+        json.messages = json.messages.map(m => {
+          if (m.role === 'system' || m.role === 'developer') {
+            if (typeof m.content === 'string') {
+              const cleaned = cleanTextSignature(m.content, options.customReplacements);
+              if (cleaned !== m.content) {
+                m.content = cleaned;
+                changed = true;
+                changes.push(`Sanitized ${m.role} message`);
+              }
+            } else if (Array.isArray(m.content)) {
+              m.content = m.content.map(part => {
+                if (part && typeof part.text === 'string') {
+                  const cleaned = cleanTextSignature(part.text, options.customReplacements);
+                  if (cleaned !== part.text) {
+                    part.text = cleaned;
+                    changed = true;
+                    changes.push(`Sanitized multipart ${m.role} message`);
+                  }
+                }
+                return part;
+              });
+            }
+          }
+          return m;
+        });
       }
     }
+
+    if (options.stripSignatures !== false && typeof json.system === 'string') {
+      const cleaned = cleanTextSignature(json.system, options.customReplacements);
+      if (cleaned !== json.system) {
+        json.system = cleaned;
+        changed = true;
+        changes.push('Sanitized top-level system prompt');
+      }
+    }
+
+    // Handle tools array
+    if (noTools) {
+      if (json.tools) {
+        delete json.tools;
+        delete json.tool_choice;
+        changed = true;
+        changes.push('Removed tools and tool_choice');
+      }
+    } else if (options.simplifyToolSchemas !== false && Array.isArray(json.tools)) {
+      delete json.strict;
+      json.tools = json.tools.map(t => {
+        delete t.strict;
+        if (t.function) {
+          delete t.function.strict;
+          if (t.function.parameters) {
+            t.function.parameters = simplifySchema(t.function.parameters);
+            changed = true;
+          }
+        }
+        return t;
+      });
+      changes.push('Simplified tool schemas');
+    }
+
+    if (json.strict !== undefined) {
+      delete json.strict;
+      changed = true;
+    }
+
+    modifiedBody = JSON.stringify(json);
+  } catch (_) {
+    // Non-JSON payload
   }
 
-  if (config.stripStrict !== false && body.strict !== undefined) {
-    delete body.strict;
-    changed = true;
-    changes.push('Removed top-level strict flag');
-  }
+  modifiedHeaders['content-length'] = Buffer.byteLength(modifiedBody);
+  return { modifiedBody, modifiedHeaders, isTitleRequest, userTextForTitle, changed, changes };
+}
 
-  return { body, changed, changes };
+function setCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', '*');
 }
 
 // --- HTTP Request Handler ---
 const server = http.createServer((req, res) => {
+  setCorsHeaders(res);
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
-      'Access-Control-Allow-Headers': '*',
-      'Access-Control-Max-Age': '86400'
-    });
+    res.writeHead(204);
     return res.end();
   }
 
@@ -1062,91 +1139,83 @@ const server = http.createServer((req, res) => {
 
   req.on('data', chunk => chunks.push(chunk));
   req.on('end', () => {
-    const rawBody = Buffer.concat(chunks);
-    let finalBody = rawBody;
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    const {
+      modifiedBody,
+      modifiedHeaders,
+      isTitleRequest,
+      userTextForTitle,
+      changed,
+      changes
+    } = sanitizePayload(rawBody, req.headers, config);
+
     let model = 'N/A';
     let toolCount = 0;
-    let sanitized = false;
-    let changes = [];
-    let isMockTitle = false;
+    try {
+      const parsed = JSON.parse(modifiedBody);
+      model = parsed.model || 'N/A';
+      toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
+    } catch (_) {}
 
-    // Check if JSON body
-    const contentType = req.headers['content-type'] || '';
-    if (contentType.includes('application/json') && rawBody.length > 0) {
+    if (isTitleRequest) {
+      stats.savedTitleCalls++;
+      const mockResponse = generateMockTitleResponse(userTextForTitle, model);
+      const fakeTitleResp = JSON.stringify(mockResponse);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Content-Length': Buffer.byteLength(fakeTitleResp)
+      });
+      res.end(fakeTitleResp);
+      console.log(`[${new Date().toISOString()}] ⚡ Handled session title locally ("${userTextForTitle}")`);
+      logTraffic({
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        method: req.method,
+        path: req.url,
+        model,
+        toolCount,
+        status: '200 (LOCAL)',
+        latencyMs: Date.now() - startTime,
+        sanitized: true,
+        snippet: `Handled session title locally ("${userTextForTitle}")`,
+        details: { titleMock: true, model }
+      });
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    if (req.url.includes('/chat/completions') || req.url.includes('/messages')) {
+      writeLog('\n' + '='.repeat(90));
+      writeLog(`[${timestamp}] >>> REQUEST: ${req.method} ${req.url} ${config.noTools ? '[NO-TOOLS]' : '[SIMPLIFIED-TOOLS]'}`);
       try {
-        let json = JSON.parse(rawBody.toString('utf8'));
-        model = json.model || 'N/A';
-        toolCount = Array.isArray(json.tools) ? json.tools.length : 0;
-
-        // Check if session_title mock needed
-        if (config.mockLocalTitles && isTitleGenerationRequest(json)) {
-          isMockTitle = true;
-          stats.savedTitleCalls++;
-          const mockResponse = generateMockTitleResponse(json);
-          const respBuf = Buffer.from(JSON.stringify(mockResponse));
-
-          res.writeHead(200, {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Content-Length': respBuf.length
-          });
-          res.end(respBuf);
-
-          logTraffic({
-            id: Date.now(),
-            timestamp: new Date().toISOString(),
-            method: req.method,
-            path: req.url,
-            model,
-            toolCount,
-            status: '200 (LOCAL)',
-            latencyMs: Date.now() - startTime,
-            sanitized: true,
-            snippet: 'Synthetic local session title response returned to save RPM quota',
-            details: { titleMock: true, model }
-          });
-          return;
-        }
-
-        // Apply Sanitization
-        const result = sanitizePayload(json);
-        if (result.changed) {
-          sanitized = true;
-          stats.sanitizedCount++;
-          changes = result.changes;
-          finalBody = Buffer.from(JSON.stringify(result.body));
-        }
-      } catch (err) {
-        console.warn('[AG-SHIELD] Could not parse request body as JSON:', err.message);
+        const parsed = JSON.parse(modifiedBody);
+        console.log(`[${timestamp}] >>> ${req.method} ${req.url} | model=${parsed.model} | stream=${!!parsed.stream} | tools=${parsed.tools?.length ?? 0}`);
+        writeLog(JSON.stringify(parsed, null, 2));
+      } catch {
+        writeLog(modifiedBody);
       }
     }
 
     // Forward to Upstream
     const isHttps = config.targetProtocol === 'https' || config.targetPort === 443;
     const transport = isHttps ? https : http;
+    const targetHost = config.targetHost || '127.0.0.1';
+    const targetPort = config.targetPort || 20128;
+    const hostHeader = (targetPort === 80 || targetPort === 443)
+      ? targetHost
+      : `${targetHost}:${targetPort}`;
 
-    const proxyHeaders = { ...req.headers };
-    delete proxyHeaders['host'];
+    const proxyHeaders = { ...modifiedHeaders };
+    proxyHeaders['host'] = hostHeader;
+
+    delete proxyHeaders['connection'];
     delete proxyHeaders['transfer-encoding'];
-    proxyHeaders['host'] = (config.targetPort === 80 || config.targetPort === 443)
-      ? config.targetHost
-      : `${config.targetHost}:${config.targetPort}`;
+    delete proxyHeaders['origin'];
+    delete proxyHeaders['referer'];
 
-    // Inject upstream target API key if configured
     if (config.targetApiKey && config.targetApiKey.trim().length > 0) {
       proxyHeaders['authorization'] = `Bearer ${config.targetApiKey.trim()}`;
-    }
-
-    if (config.spoofUserAgent) {
-      proxyHeaders['user-agent'] = config.customUserAgent || 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
-      delete proxyHeaders['x-hermes-version'];
-      delete proxyHeaders['x-client-name'];
-    }
-
-    if (finalBody.length > 0) {
-      proxyHeaders['content-length'] = Buffer.byteLength(finalBody);
-    } else {
-      delete proxyHeaders['content-length'];
     }
 
     let forwardPath = req.url;
@@ -1156,8 +1225,8 @@ const server = http.createServer((req, res) => {
     }
 
     const proxyReq = transport.request({
-      hostname: config.targetHost,
-      port: config.targetPort,
+      hostname: targetHost,
+      port: targetPort,
       path: forwardPath,
       method: req.method,
       headers: proxyHeaders
@@ -1166,26 +1235,37 @@ const server = http.createServer((req, res) => {
       respHeaders['access-control-allow-origin'] = '*';
       res.writeHead(proxyRes.statusCode, respHeaders);
 
-      let errSnippet = '';
+      let respChunks = [];
       proxyRes.on('data', chunk => {
+        respChunks.push(chunk);
         res.write(chunk);
-        if (proxyRes.statusCode >= 400 && errSnippet.length < 512) {
-          errSnippet += chunk.toString('utf8');
-        }
       });
+
       proxyRes.on('end', () => {
         res.end();
         const latencyMs = Date.now() - startTime;
         const status = proxyRes.statusCode;
+        const fullResp = Buffer.concat(respChunks).toString('utf8');
+
+        if (req.url.includes('/chat/completions') || req.url.includes('/messages')) {
+          const endTs = new Date().toISOString();
+          if (status >= 400) {
+            console.log(`[${endTs}] ❌ STATUS ${status}: ${fullResp.slice(0, 300)}`);
+          } else {
+            console.log(`[${endTs}] ✅ STATUS ${status} OK (${fullResp.length} bytes)`);
+          }
+          writeLog(`\n--- RESPONSE FROM 9ROUTER (STATUS ${status}) ---`);
+          writeLog(fullResp);
+        }
 
         let errorReason = '';
         if (status >= 400) {
           stats.errorCount++;
           try {
-            const errObj = JSON.parse(errSnippet);
+            const errObj = JSON.parse(fullResp);
             errorReason = (errObj.error && errObj.error.message) || errObj.message || errObj.error || '';
           } catch (_) {
-            errorReason = errSnippet.slice(0, 120).trim();
+            errorReason = fullResp.slice(0, 120).trim();
           }
         }
 
@@ -1198,11 +1278,11 @@ const server = http.createServer((req, res) => {
           toolCount,
           status,
           latencyMs,
-          sanitized,
+          sanitized: changed,
           snippet: errorReason
             ? `${status} upstream: ${errorReason}`
-            : `Proxied to ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}`,
-          details: { changes, model, status, errorReason, responsePreview: errSnippet.slice(0, 300) }
+            : `Proxied to ${config.targetProtocol || 'http'}://${targetHost}:${targetPort}`,
+          details: { changes, model, status, errorReason, responsePreview: fullResp.slice(0, 300) }
         });
       });
     });
@@ -1210,20 +1290,16 @@ const server = http.createServer((req, res) => {
     proxyReq.on('error', (err) => {
       stats.errorCount++;
       const latencyMs = Date.now() - startTime;
-      const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort} (${err.code || err.message})`;
+      const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetProtocol || 'http'}://${targetHost}:${targetPort} (${err.code || err.message})`;
 
-      const errPayload = JSON.stringify({
-        error: {
-          message: errorMsg,
-          code: 'UPSTREAM_UNAVAILABLE'
-        }
-      });
-
-      res.writeHead(502, {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      });
-      res.end(errPayload);
+      console.error('❌ Cannot reach 9Router:', err.message);
+      if (!res.headersSent) {
+        res.writeHead(502, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(JSON.stringify({ error: { message: errorMsg, code: 'UPSTREAM_UNAVAILABLE' } }));
+      }
 
       logTraffic({
         id: Date.now(),
@@ -1234,14 +1310,14 @@ const server = http.createServer((req, res) => {
         toolCount,
         status: 502,
         latencyMs,
-        sanitized,
+        sanitized: changed,
         snippet: errorMsg,
         details: { error: err.message, code: err.code }
       });
     });
 
-    if (finalBody.length > 0) {
-      proxyReq.write(finalBody);
+    if (modifiedBody) {
+      proxyReq.write(modifiedBody);
     }
     proxyReq.end();
   });
@@ -1249,7 +1325,23 @@ const server = http.createServer((req, res) => {
 
 // Start Server
 if (require.main === module) {
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[AG-SHIELD] ERROR: Port ${config.listenPort} is already in use!`);
+      console.error(`Another instance (or background service) is occupying port ${config.listenPort}.`);
+      console.error(`To stop it and free the port, run:`);
+      console.error(`  ag-shield stop   (or node index.js stop)\n`);
+      process.exit(1);
+    } else {
+      console.error('[AG-SHIELD] Server error:', err.message);
+      process.exit(1);
+    }
+  });
+
   server.listen(config.listenPort, '0.0.0.0', () => {
+    try {
+      fs.writeFileSync(LOG_FILE, `=== Log started at ${new Date().toISOString()} ===\n`, 'utf8');
+    } catch (_) {}
     if (!args.includes('--no-tray') && process.platform === 'win32') {
       startWindowsTray(config.listenPort);
     }
@@ -1270,6 +1362,7 @@ if (require.main === module) {
 module.exports = {
   server,
   startWindowsTray,
+  killProcessOnPort,
   stopWindowsTray,
   config,
   PKG_VERSION,
@@ -1278,12 +1371,16 @@ module.exports = {
   checkRemoteVersion,
   runSelfUpdate,
   stats,
-  sanitizeText,
-  cleanJsonSchema,
+  cleanTextSignature,
+  simplifySchema,
+  sanitizeText: (text, custom) => ({ text: cleanTextSignature(text, custom), changed: text !== cleanTextSignature(text, custom) }),
+  cleanJsonSchema: simplifySchema,
   isTitleGenerationRequest,
   generateMockTitleResponse,
   sanitizePayload,
   getAutostartInfo,
   setAutostart,
-  DEFAULT_CONFIG
+  DEFAULT_CONFIG,
+  writeLog,
+  LOG_FILE
 };

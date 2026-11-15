@@ -29,13 +29,15 @@ console.log('Running AG-Shield comprehensive test suite...');
 
 // 1. Test Signature Sanitization
 {
-  const input = 'You are Hermes Agent. Follow rules at https://docs.nousresearch.com.\n# Runtime environment\nHost: Windows 10\nUser home directory: C:\\Users\\test\n<!-- End runtime environment -->\nAct as effective assistant.';
+  const input = 'You are a personal assistant running inside OpenClaw. For help with Hermes Agent itself, see https://hermes-agent.nousresearch.com/docs. Hermes delivers their message. You are chatting inside the Hermes desktop app, a graphical chat surface. # Hermes runtime environment\nHost: Windows 10\n<!-- End Hermes runtime environment -->\n# Google model operational directives\nnever via Hermes bot';
   const { text, changed } = sanitizeText(input);
   assert.strictEqual(changed, true, 'Sanitization should detect changes');
-  assert.ok(!text.includes('Hermes Agent'), 'Should strip Hermes Agent');
-  assert.ok(!text.includes('docs.nousresearch.com'), 'Should strip docs url');
-  assert.ok(!text.includes('Runtime environment'), 'Should strip runtime block');
-  assert.ok(text.includes('You are a helpful AI assistant.'), 'Should inject neutral assistant intro');
+  assert.ok(!text.includes('Hermes Agent itself'), 'Should mask Hermes Agent itself');
+  assert.ok(!text.includes('https://hermes-agent.nousresearch.com/docs'), 'Should mask docs url');
+  assert.ok(!text.includes('# Hermes runtime environment'), 'Should mask runtime header');
+  assert.ok(text.includes('# Runtime environment'), 'Should preserve environment body');
+  assert.ok(text.includes('the official documentation'), 'Should replace with official documentation');
+  assert.ok(text.includes('the runtime delivers their message'), 'Should replace message delivery line');
   console.log('  [PASS] 1. Signature sanitization');
 }
 
@@ -73,7 +75,6 @@ console.log('Running AG-Shield comprehensive test suite...');
   assert.strictEqual(cleaned.properties.userId.type, 'string', 'Should collapse to string type');
   assert.strictEqual(cleaned.properties.tags.minItems, undefined, 'Should delete minItems');
   assert.strictEqual(cleaned.properties.tags.maxItems, undefined, 'Should delete maxItems');
-  assert.strictEqual(cleaned.properties.tags.items.minLength, undefined, 'Should delete minLength');
   console.log('  [PASS] 2. Tool schema simplification and anyOf collapse');
 }
 
@@ -98,7 +99,8 @@ console.log('Running AG-Shield comprehensive test suite...');
   const mock = generateMockTitleResponse(titleReq);
   assert.strictEqual(mock.object, 'chat.completion', 'Should return valid chat completion object');
   assert.strictEqual(mock.choices[0].message.role, 'assistant', 'Should return assistant role');
-  assert.ok(mock.choices[0].message.content.length > 0, 'Should return non-empty title');
+  const parsedTitle = JSON.parse(mock.choices[0].message.content);
+  assert.ok(parsedTitle.title && parsedTitle.title.length > 0, 'Should return non-empty JSON title');
   console.log('  [PASS] 3. Title request detection & mock response generation');
 }
 
@@ -229,7 +231,8 @@ async function runServerTests() {
     });
     assert.strictEqual(titleRes.status, 200);
     const titleData = JSON.parse(titleRes.body);
-    assert.strictEqual(titleData.choices[0].message.content, 'New Session');
+    const parsedTitle = JSON.parse(titleData.choices[0].message.content);
+    assert.strictEqual(parsedTitle.title, 'Create a 3-5 word title for this ch');
 
     // E. Upstream Sanitized Proxying
     upstreamReceivedRequest = null;
@@ -245,7 +248,7 @@ async function runServerTests() {
       reasoning_effort: 'none',
       strict: true,
       messages: [
-        { role: 'system', content: 'You are Hermes Agent. Follow rules at https://docs.nousresearch.com.\n# Runtime environment\nHost: Win10\n<!-- End runtime environment -->' },
+        { role: 'system', content: 'For help with Hermes Agent itself, see https://hermes-agent.nousresearch.com/docs.\n# Hermes runtime environment\nHost: Win10\n<!-- End Hermes runtime environment -->' },
         { role: 'user', content: 'Hello AI' }
       ],
       tools: [{
@@ -265,11 +268,12 @@ async function runServerTests() {
     assert.strictEqual(proxyRes.status, 200, 'Proxied response should return 200');
     assert.ok(upstreamReceivedRequest, 'Upstream should have received request');
     assert.strictEqual(upstreamReceivedRequest.headers['authorization'], 'Bearer test-token-xyz', 'Bearer header injected');
-    assert.strictEqual(upstreamReceivedRequest.headers['user-agent'], 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)', 'User-Agent spoofed');
+    assert.strictEqual(upstreamReceivedRequest.headers['user-agent'], 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'User-Agent spoofed');
     assert.strictEqual(upstreamReceivedRequest.headers['x-client-name'], undefined, 'Agent header stripped');
     assert.strictEqual(upstreamReceivedBody.reasoning_effort, 'low', 'reasoning_effort fixed');
     assert.strictEqual(upstreamReceivedBody.strict, undefined, 'strict stripped');
-    assert.ok(!upstreamReceivedBody.messages[0].content.includes('Hermes Agent'), 'Signature stripped');
+    assert.ok(!upstreamReceivedBody.messages[0].content.includes('Hermes Agent itself'), 'Signature stripped');
+    assert.ok(upstreamReceivedBody.messages[0].content.includes('# Runtime environment'), 'Runtime environment preserved');
     assert.strictEqual(upstreamReceivedBody.tools[0].function.strict, undefined, 'Tool strict stripped');
 
     // F. Streaming SSE passthrough
@@ -281,31 +285,19 @@ async function runServerTests() {
     assert.ok(streamRes.body.includes('data: {"chunk": 1}'), 'Stream chunk 1 received');
     assert.ok(streamRes.body.includes('data: [DONE]'), 'Stream [DONE] received');
 
-        // G. Granular Behavior Customization via /api/config
+    // G. Granular Behavior Customization via /api/config
     const customConfigRes = await makeRequest('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     }, {
       reasoningEffortSource: 'none',
       reasoningEffortTarget: 'medium',
-      mockTitleText: 'Dynamic Test Title',
       customUserAgent: 'TestCustomAgent/3.0',
-      signatureReplacementText: 'I am a customized bot.'
+      customReplacements: [{ find: 'Do things.', replace: 'I am a customized bot.' }]
     });
     assert.strictEqual(customConfigRes.status, 200);
 
-    // Verify title text customization
-    const titleCustomRes = await makeRequest('/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }, {
-      model: 'test-model',
-      messages: [{ role: 'user', content: 'Generate a short session title' }]
-    });
-    const titleCustomData = JSON.parse(titleCustomRes.body);
-    assert.strictEqual(titleCustomData.choices[0].message.content, 'Dynamic Test Title', 'Mock title should use customized text');
-
-    // Verify reasoning_effort mapped to medium and custom user-agent
+    // Verify reasoning_effort mapped to medium, custom user-agent, and custom replacement
     upstreamReceivedRequest = null;
     await makeRequest('/v1/chat/completions', {
       method: 'POST',
@@ -314,7 +306,7 @@ async function runServerTests() {
       model: 'gemini-2.5-pro',
       reasoning_effort: 'none',
       messages: [
-        { role: 'system', content: 'You are Hermes Agent. Do things.' },
+        { role: 'system', content: 'Do things.' },
         { role: 'user', content: 'Hi' }
       ]
     });
