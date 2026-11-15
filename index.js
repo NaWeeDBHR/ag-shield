@@ -824,6 +824,7 @@ const server = http.createServer((req, res) => {
 
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['host'];
+    delete proxyHeaders['transfer-encoding'];
     proxyHeaders['host'] = (config.targetPort === 80 || config.targetPort === 443)
       ? config.targetHost
       : `${config.targetHost}:${config.targetPort}`;

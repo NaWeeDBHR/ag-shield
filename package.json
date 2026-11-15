@@ -10,6 +10,20 @@
     "start": "node index.js",
     "test": "node test.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NaWeeDBHR/ag-shield.git"
+  },
+  "homepage": "https://github.com/NaWeeDBHR/ag-shield#readme",
+  "bugs": {
+    "url": "https://github.com/NaWeeDBHR/ag-shield/issues"
+  },
+  "files": [
+    "index.js",
+    "ui.html",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "reverse-proxy",
     "ai-agent",
