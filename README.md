@@ -44,6 +44,7 @@ When running modern agentic coding frameworks with aggressive tool-calling or re
 ## ✨ Features
 
 - **Zero Dependencies:** Pure Node.js standard library (`http`, `https`, `fs`, `path`, `events`). Instant start, tiny footprint, zero vulnerabilities.
+- **Windows System Tray Icon:** Natively integrates into the Windows taskbar System Tray (notification area next to the clock) with zero npm packages via built-in PowerShell Forms. Double-click opens the Web Dashboard; right-click context menu offers quick URL copy, status, and graceful exit.
 - **Auto-Update & Versioning:** Real-time version display in Web UI and CLI. Automatically notifies when an update is released on GitHub/npm with one-click web update and CLI command (`node index.js --update`).
 - **Main Router Control Panel:** Full configuration panel in Web UI to set upstream protocol (`http`/`https`), host, port, API bearer key, and base path with presets (9Router, LiteLLM, OpenRouter, Gemini) and a real-time connectivity ping tester.
 - **System Boot Autostart:** Seamless one-click background autostart toggle on OS boot (Windows VBS Startup folder, macOS LaunchAgents plist, Linux autostart desktop entry).

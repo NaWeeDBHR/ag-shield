@@ -330,6 +330,42 @@ X-GNOME-Autostart-enabled=true
   }
 }
 
+let trayProcess = null;
+
+function startWindowsTray(port) {
+  if (process.platform !== 'win32') return;
+  const trayScript = path.join(__dirname, 'tray.ps1');
+  if (!fs.existsSync(trayScript)) return;
+
+  try {
+    const { spawn } = require('child_process');
+    trayProcess = spawn('powershell.exe', [
+      '-NoProfile',
+      '-WindowStyle', 'Hidden',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', trayScript,
+      '-NodePid', process.pid.toString(),
+      '-Port', port.toString()
+    ], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    trayProcess.unref();
+  } catch (_) {}
+}
+
+function stopWindowsTray() {
+  if (trayProcess) {
+    try { trayProcess.kill(); } catch (_) {}
+    trayProcess = null;
+  }
+}
+
+process.on('exit', stopWindowsTray);
+process.on('SIGINT', () => { stopWindowsTray(); process.exit(0); });
+process.on('SIGTERM', () => { stopWindowsTray(); process.exit(0); });
+
 function formatUptime(seconds) {
   if (!seconds || seconds < 60) return `${seconds || 0}s`;
   const m = Math.floor(seconds / 60);
@@ -448,6 +484,7 @@ Usage:
 Flags:
   --log, -l             Append traffic events to proxy-traffic.log
   --no-tools            Disable tool schema simplification
+  --no-tray             Disable Windows system tray icon
   --no-local-title      Disable mocking of session_title calls
   --host <host>         Set target upstream host (default: 127.0.0.1)
   --port <port>         Set listen port (default: 20129)
@@ -1213,6 +1250,9 @@ const server = http.createServer((req, res) => {
 // Start Server
 if (require.main === module) {
   server.listen(config.listenPort, '0.0.0.0', () => {
+    if (!args.includes('--no-tray') && process.platform === 'win32') {
+      startWindowsTray(config.listenPort);
+    }
     const autoInfo = getAutostartInfo();
     console.log(`
 🛡️  AG-SHIELD (Antigravity & Agentic AI Sanitizer Proxy)
@@ -1229,6 +1269,8 @@ if (require.main === module) {
 // Export for testing
 module.exports = {
   server,
+  startWindowsTray,
+  stopWindowsTray,
   config,
   PKG_VERSION,
   updateState,
