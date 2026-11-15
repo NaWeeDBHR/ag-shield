@@ -2,6 +2,8 @@
 
 const assert = require('assert');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const {
   server,
   config,
@@ -12,8 +14,13 @@ const {
   generateMockTitleResponse,
   sanitizePayload,
   getAutostartInfo,
-  setAutostart
+  setAutostart,
+  DEFAULT_CONFIG
 } = require('./index');
+
+// Ensure pristine defaults regardless of on-disk config from earlier runs
+for (const key of Object.keys(config)) delete config[key];
+Object.assign(config, JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
 
 console.log('Running AG-Shield comprehensive test suite...');
 
@@ -320,6 +327,10 @@ async function runServerTests() {
 
     await new Promise(r => upstreamServer.close(r));
     await new Promise(r => server.close(r));
+    const cfgFile = path.join(process.cwd(), 'ag-shield.config.json');
+    if (fs.existsSync(cfgFile)) {
+      try { fs.unlinkSync(cfgFile); } catch (_) {}
+    }
     process.exit(0);
   } catch (err) {
     console.error('Test suite failed:', err);
