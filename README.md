@@ -17,6 +17,8 @@ Zero-dependency, high-performance Node.js reverse-proxy and universal agentic mi
                  │  - Mocks local `session_title` (Saves RPM quota) │
                  │  - Spoofs standard OpenAI SDK User-Agent         │
                  │  - Live Web UI & SSE Traffic Inspector (/ui)     │
+                 │  - Upstream Router Config + Ping Connectivity    │
+                 │  - Optional System Boot Autostart (Startup)      │
                  └───────────────────────┬──────────────────────────┘
                                          │  Sanitized HTTP / SSE
                                          ▼
@@ -41,7 +43,9 @@ When running modern agentic coding frameworks with aggressive tool-calling or re
 
 ## ✨ Features
 
-- **Zero Dependencies:** Pure Node.js standard library (`http`, `fs`, `path`, `events`). Instant start, tiny footprint, zero vulnerabilities.
+- **Zero Dependencies:** Pure Node.js standard library (`http`, `https`, `fs`, `path`, `events`). Instant start, tiny footprint, zero vulnerabilities.
+- **Main Router Control Panel:** Full configuration panel in Web UI to set upstream protocol (`http`/`https`), host, port, API bearer key, and base path with presets (9Router, LiteLLM, OpenRouter, Gemini) and a real-time connectivity ping tester.
+- **System Boot Autostart:** Seamless one-click background autostart toggle on OS boot (Windows VBS Startup folder, macOS LaunchAgents plist, Linux autostart desktop entry).
 - **Agent Signature Neutralizer:** Automatically removes agent identity tags, environment paths, and system fingerprint headers while preserving the core task prompt.
 - **Tool Schema Simplifier:** Recursively collapses `anyOf` definitions, removes `strict: true`, `$schema`, and `additionalProperties` so tool schemas comply with strict upstream parsers.
 - **Reasoning Effort Fixer:** Translates unsupported `reasoning_effort: "none"` to `"low"` to avoid `400 INVALID_ARGUMENT` crashes.
@@ -74,11 +78,17 @@ node index.js 20129 20128
 # Custom upstream host & file logging
 node index.js --host 192.168.1.100 --target-port 8000 --log
 
+# System Autostart CLI commands:
+node index.js --autostart-enable   # Register in Windows Startup / Linux Autostart
+node index.js --autostart-disable  # Remove from boot startup
+node index.js --autostart-status   # Show current autostart status
+
 # Flags:
-#   --log, -l           Append traffic events to proxy-traffic.log
-#   --no-tools          Disable tool schema simplification
-#   --no-local-title    Disable mocking of session_title calls
-#   --help, -h          Show help message
+#   --log, -l              Append traffic events to proxy-traffic.log
+#   --no-tools             Disable tool schema simplification
+#   --no-local-title       Disable mocking of session_title calls
+#   --protocol <http|https> Upstream protocol
+#   --help, -h             Show help message
 ```
 
 ---
@@ -87,9 +97,10 @@ node index.js --host 192.168.1.100 --target-port 8000 --log
 
 Open **`http://127.0.0.1:20129/ui`** in your browser:
 
+- **Main Upstream Router (مشخصات روتر اصلی):** Select presets (9Router, LiteLLM, OpenRouter, Google Gemini) or enter custom Host, Port, Protocol, and API Key. Includes **⚡ Test Ping** button to verify upstream health live.
+- **System Boot Autostart:** Toggle silent background launch on OS startup with one click.
 - **Live KPIs:** Total requests, signatures neutralized, RPM quota saved, upstream errors trapped.
 - **Feature Toggles:** Real-time toggles for signature stripping, schema simplification, reasoning effort mapping, and user-agent spoofing.
-- **Upstream Target:** Easily adjust target host and port without restarting.
 - **Custom Text Filters:** Add custom regex or text replacement rules.
 - **Live Traffic Inspector:** Real-time table showing latency, HTTP status, tool count, and an inspect drawer for payload debugging.
 

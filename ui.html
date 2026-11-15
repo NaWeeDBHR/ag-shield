@@ -238,10 +238,10 @@
     input:checked + .slider { background-color: var(--accent); }
     input:checked + .slider:before { transform: translateX(20px); }
 
-    /* Upstream target form */
-    .form-group { margin-bottom: 14px; }
+    /* Forms */
+    .form-group { margin-bottom: 12px; }
     .form-label { display: block; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 6px; }
-    .form-input {
+    .form-input, .form-select {
       width: 100%;
       background: rgba(0, 0, 0, 0.35);
       border: 1px solid var(--card-border);
@@ -253,7 +253,9 @@
       outline: none;
       transition: border-color 0.2s;
     }
-    .form-input:focus { border-color: var(--accent); }
+    .form-input:focus, .form-select:focus { border-color: var(--accent); }
+    .form-select option { background: #0f172a; color: #fff; }
+
     .btn-primary {
       background: linear-gradient(135deg, #2563eb, #3b82f6);
       border: none;
@@ -268,9 +270,25 @@
     }
     .btn-primary:hover { opacity: 0.9; }
 
+    .btn-test {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #34d399;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-test:hover { background: rgba(16, 185, 129, 0.25); color: #fff; }
+
     /* Custom replacements */
     .rep-container { margin-top: 14px; }
-    .rep-list { max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+    .rep-list { max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
     .rep-item {
       display: flex;
       align-items: center;
@@ -450,7 +468,8 @@
           <span class="pulse-dot"></span>
           <span>ONLINE</span>
         </div>
-        <div class="pill" id="target-pill">Target: 127.0.0.1:20128</div>
+        <div class="pill" id="autostart-pill">Boot: Checking...</div>
+        <div class="pill" id="target-pill">Target: http://127.0.0.1:20128</div>
         <button class="btn-copy" id="copy-btn" onclick="copyEndpoint()">
           <span>Copy Base URL:</span>
           <strong id="endpoint-text">http://127.0.0.1:20129/v1</strong>
@@ -484,13 +503,24 @@
 
     <!-- Controls Panel -->
     <div class="controls-grid">
-      <!-- Engine Toggles -->
+      <!-- Engine Toggles & System Autostart -->
       <div class="panel-card">
         <div class="panel-title">
           <svg style="width:18px;height:18px;fill:var(--accent)" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-          Active Sanitization Rules
+          Active Sanitization & System Rules
         </div>
         <div class="switch-list">
+          <div class="switch-row" style="background:rgba(59,130,246,0.06); padding:10px; border-radius:8px; border-bottom:none;">
+            <div class="switch-info">
+              <div class="switch-name" style="color:#93c5fd;">🚀 Run on System Boot (Autostart)</div>
+              <div class="switch-desc" id="autostart-desc">Auto-launch silently in background on OS startup</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg-autostart" onchange="toggleAutostart()">
+              <span class="slider"></span>
+            </label>
+          </div>
+
           <div class="switch-row">
             <div class="switch-info">
               <div class="switch-name">Strip Agent Signatures</div>
@@ -548,30 +578,65 @@
         </div>
       </div>
 
-      <!-- Upstream & Custom Filters -->
+      <!-- Upstream Main Router Panel -->
       <div class="panel-card">
         <div class="panel-title">
           <svg style="width:18px;height:18px;fill:var(--purple)" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-          Upstream Target & Custom Filters
+          Main Upstream Router (مشخصات روتر اصلی)
         </div>
 
-        <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <!-- Router Presets -->
+        <div class="form-group">
+          <label class="form-label">Router Preset</label>
+          <select class="form-select" id="router-preset" onchange="applyPreset()">
+            <option value="9router">9Router / Antigravity (127.0.0.1:20128 HTTP)</option>
+            <option value="litellm">LiteLLM Proxy (127.0.0.1:4000 HTTP)</option>
+            <option value="openrouter">OpenRouter (openrouter.ai:443 HTTPS)</option>
+            <option value="gemini">Google Gemini OpenAI-Compat (generativelanguage.googleapis.com:443 HTTPS)</option>
+            <option value="custom">Custom Upstream Router / Gateway</option>
+          </select>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 2fr 1fr; gap: 8px; margin-bottom: 10px;">
           <div>
-            <label class="form-label">Upstream Target Host</label>
+            <label class="form-label">Protocol</label>
+            <select class="form-select" id="cfg-targetProtocol">
+              <option value="http">http://</option>
+              <option value="https">https://</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Host / IP</label>
             <input type="text" class="form-input" id="cfg-targetHost" placeholder="127.0.0.1">
           </div>
           <div>
-            <label class="form-label">Target Port</label>
+            <label class="form-label">Port</label>
             <input type="number" class="form-input" id="cfg-targetPort" placeholder="20128">
           </div>
         </div>
-        <button class="btn-primary" onclick="saveTarget()" style="margin-bottom: 18px;">Save Upstream Target</button>
+
+        <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-bottom: 12px;">
+          <div>
+            <label class="form-label">Upstream API Key (Optional)</label>
+            <input type="password" class="form-input" id="cfg-targetApiKey" placeholder="Bearer sk-... or leave empty">
+          </div>
+          <div>
+            <label class="form-label">Base Path (Opt)</label>
+            <input type="text" class="form-input" id="cfg-targetBasePath" placeholder="/v1 or /">
+          </div>
+        </div>
+
+        <div style="display:flex; gap: 8px; margin-bottom: 16px;">
+          <button class="btn-primary" onclick="saveTarget()" style="flex:2;">Save Router Settings</button>
+          <button class="btn-test" onclick="testUpstreamConnection()" style="flex:1;">
+            <span>⚡ Test Ping</span>
+          </button>
+        </div>
+        <div id="test-result-box" style="display:none; font-size:0.75rem; font-family:var(--mono); padding:8px 12px; border-radius:6px; margin-bottom:14px;"></div>
 
         <div class="rep-container">
           <label class="form-label">Custom Text Replacements</label>
-          <div class="rep-list" id="rep-list">
-            <!-- items injected by JS -->
-          </div>
+          <div class="rep-list" id="rep-list"></div>
           <div class="rep-add-row">
             <input type="text" class="form-input" id="new-find" placeholder="Find text..." style="font-size:0.75rem;">
             <input type="text" class="form-input" id="new-replace" placeholder="Replace with..." style="font-size:0.75rem;">
@@ -635,6 +700,7 @@
   <script>
     let currentConfig = {};
     let trafficLogs = [];
+    let autostartInfo = {};
 
     function showToast(msg) {
       const t = document.getElementById('toast');
@@ -652,6 +718,25 @@
       });
     }
 
+    const PRESETS = {
+      '9router': { protocol: 'http', host: '127.0.0.1', port: 20128, basePath: '', key: '' },
+      'litellm': { protocol: 'http', host: '127.0.0.1', port: 4000, basePath: '', key: '' },
+      'openrouter': { protocol: 'https', host: 'openrouter.ai', port: 443, basePath: '/api/v1', key: '' },
+      'gemini': { protocol: 'https', host: 'generativelanguage.googleapis.com', port: 443, basePath: '/v1beta/openai', key: '' },
+      'custom': {}
+    };
+
+    function applyPreset() {
+      const pKey = document.getElementById('router-preset').value;
+      const p = PRESETS[pKey];
+      if (!p || pKey === 'custom') return;
+      document.getElementById('cfg-targetProtocol').value = p.protocol;
+      document.getElementById('cfg-targetHost').value = p.host;
+      document.getElementById('cfg-targetPort').value = p.port;
+      document.getElementById('cfg-targetBasePath').value = p.basePath || '';
+      showToast('Loaded preset: ' + pKey);
+    }
+
     async function loadStatus() {
       try {
         const res = await fetch('/api/status');
@@ -659,6 +744,9 @@
         currentConfig = data.config || {};
         applyConfigToUI(currentConfig);
         updateKPIs(data.stats || {});
+        if (data.autostart) {
+          updateAutostartUI(data.autostart);
+        }
         if (data.logs && Array.isArray(data.logs)) {
           trafficLogs = data.logs;
           renderTraffic();
@@ -668,18 +756,94 @@
       }
     }
 
+    function updateAutostartUI(info) {
+      autostartInfo = info;
+      const toggle = document.getElementById('cfg-autostart');
+      const pill = document.getElementById('autostart-pill');
+      const desc = document.getElementById('autostart-desc');
+
+      toggle.checked = !!info.enabled;
+      if (info.enabled) {
+        pill.innerText = 'Boot: ACTIVE';
+        pill.classList.add('pill-active');
+        desc.innerText = `Auto-start active (${info.platform}) -> ${info.path}`;
+      } else {
+        pill.innerText = 'Boot: OFF';
+        pill.classList.remove('pill-active');
+        desc.innerText = `Auto-start disabled (${info.platform})`;
+      }
+    }
+
+    async function toggleAutostart() {
+      const enable = document.getElementById('cfg-autostart').checked;
+      try {
+        const res = await fetch('/api/autostart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: enable })
+        });
+        const data = await res.json();
+        updateAutostartUI(data);
+        showToast(enable ? 'Enabled system boot autostart' : 'Disabled boot autostart');
+      } catch (err) {
+        showToast('Error toggling autostart: ' + err.message);
+      }
+    }
+
+    async function testUpstreamConnection() {
+      const box = document.getElementById('test-result-box');
+      box.style.display = 'block';
+      box.style.background = 'rgba(59, 130, 246, 0.1)';
+      box.style.border = '1px solid rgba(59, 130, 246, 0.3)';
+      box.style.color = '#93c5fd';
+      box.innerText = 'Testing connection to upstream router...';
+
+      const targetProtocol = document.getElementById('cfg-targetProtocol').value;
+      const targetHost = document.getElementById('cfg-targetHost').value.trim() || '127.0.0.1';
+      const targetPort = parseInt(document.getElementById('cfg-targetPort').value, 10) || 20128;
+      const targetApiKey = document.getElementById('cfg-targetApiKey').value.trim();
+
+      try {
+        const res = await fetch('/api/test-upstream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetProtocol, targetHost, targetPort, targetApiKey })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          box.style.background = 'rgba(16, 185, 129, 0.15)';
+          box.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+          box.style.color = '#34d399';
+          box.innerText = `✔ ${data.message}`;
+        } else {
+          box.style.background = 'rgba(239, 68, 68, 0.15)';
+          box.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+          box.style.color = '#f87171';
+          box.innerText = `✖ ${data.message}`;
+        }
+      } catch (err) {
+        box.style.background = 'rgba(239, 68, 68, 0.15)';
+        box.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        box.style.color = '#f87171';
+        box.innerText = '✖ Test failed: ' + err.message;
+      }
+    }
+
     function applyConfigToUI(cfg) {
       document.getElementById('cfg-stripSignatures').checked = !!cfg.stripSignatures;
       document.getElementById('cfg-simplifyToolSchemas').checked = !!cfg.simplifyToolSchemas;
       document.getElementById('cfg-fixReasoningEffort').checked = !!cfg.fixReasoningEffort;
       document.getElementById('cfg-mockLocalTitles').checked = !!cfg.mockLocalTitles;
       document.getElementById('cfg-spoofUserAgent').checked = !!cfg.spoofUserAgent;
+      document.getElementById('cfg-targetProtocol').value = cfg.targetProtocol || 'http';
       document.getElementById('cfg-targetHost').value = cfg.targetHost || '127.0.0.1';
       document.getElementById('cfg-targetPort').value = cfg.targetPort || 20128;
+      document.getElementById('cfg-targetApiKey').value = cfg.targetApiKey || '';
+      document.getElementById('cfg-targetBasePath').value = cfg.targetBasePath || '';
 
       const port = cfg.listenPort || window.location.port || 20129;
       document.getElementById('endpoint-text').innerText = 'http://127.0.0.1:' + port + '/v1';
-      document.getElementById('target-pill').innerText = 'Target: ' + (cfg.targetHost || '127.0.0.1') + ':' + (cfg.targetPort || 20128);
+      document.getElementById('target-pill').innerText = 'Target: ' + (cfg.targetProtocol || 'http') + '://' + (cfg.targetHost || '127.0.0.1') + ':' + (cfg.targetPort || 20128);
 
       renderReplacements(cfg.customReplacements || []);
     }
@@ -699,13 +863,21 @@
     }
 
     async function saveTarget() {
+      const targetProtocol = document.getElementById('cfg-targetProtocol').value;
       const targetHost = document.getElementById('cfg-targetHost').value.trim() || '127.0.0.1';
       const targetPort = parseInt(document.getElementById('cfg-targetPort').value, 10) || 20128;
+      const targetApiKey = document.getElementById('cfg-targetApiKey').value.trim();
+      const targetBasePath = document.getElementById('cfg-targetBasePath').value.trim();
+
+      currentConfig.targetProtocol = targetProtocol;
       currentConfig.targetHost = targetHost;
       currentConfig.targetPort = targetPort;
-      await postConfig({ targetHost, targetPort });
-      document.getElementById('target-pill').innerText = 'Target: ' + targetHost + ':' + targetPort;
-      showToast('Upstream target saved: ' + targetHost + ':' + targetPort);
+      currentConfig.targetApiKey = targetApiKey;
+      currentConfig.targetBasePath = targetBasePath;
+
+      await postConfig({ targetProtocol, targetHost, targetPort, targetApiKey, targetBasePath });
+      document.getElementById('target-pill').innerText = 'Target: ' + targetProtocol + '://' + targetHost + ':' + targetPort;
+      showToast('Upstream router saved: ' + targetProtocol + '://' + targetHost + ':' + targetPort);
     }
 
     async function addReplacement() {
@@ -844,7 +1016,6 @@
       })[m]);
     }
 
-    // Connect SSE for live traffic
     function initSSE() {
       const source = new EventSource('/api/events');
       source.onmessage = (e) => {
@@ -862,7 +1033,6 @@
         }
       };
       source.onerror = () => {
-        // Fallback polling if SSE disconnects
         setTimeout(loadStatus, 5000);
       };
     }

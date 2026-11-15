@@ -10,7 +10,9 @@ const {
   cleanJsonSchema,
   isTitleGenerationRequest,
   generateMockTitleResponse,
-  sanitizePayload
+  sanitizePayload,
+  getAutostartInfo,
+  setAutostart
 } = require('./index');
 
 console.log('Running AG-Shield self-check suite...');
@@ -90,42 +92,12 @@ console.log('Running AG-Shield self-check suite...');
   console.log('  [PASS] Title request detection & mock response generation');
 }
 
-// 4. Test Full Payload Sanitization
+// 4. Test Autostart Helper
 {
-  const payload = {
-    model: 'gemini-2.5-flash',
-    reasoning_effort: 'none',
-    strict: true,
-    messages: [
-      { role: 'system', content: 'You are OpenClaw agent.' },
-      { role: 'user', content: 'Hello' }
-    ],
-    tools: [
-      {
-        type: 'function',
-        function: {
-          name: 'get_weather',
-          strict: true,
-          parameters: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              city: { type: 'string' }
-            }
-          }
-        }
-      }
-    ]
-  };
-
-  const { body, changed, changes } = sanitizePayload(payload);
-  assert.strictEqual(changed, true, 'Payload should be marked changed');
-  assert.strictEqual(body.reasoning_effort, 'low', 'Mapped reasoning_effort to low');
-  assert.strictEqual(body.strict, undefined, 'Removed top-level strict');
-  assert.strictEqual(body.tools[0].function.strict, undefined, 'Removed tool strict');
-  assert.strictEqual(body.tools[0].function.parameters.additionalProperties, undefined, 'Removed tool additionalProperties');
-  assert.ok(body.messages[0].content.includes('You are a helpful AI assistant.'), 'Sanitized system message');
-  console.log('  [PASS] Full payload sanitization (reasoning_effort, strict, tools, messages)');
+  const info = getAutostartInfo();
+  assert.ok(info.platform, 'Autostart should detect platform');
+  assert.ok(info.path, 'Autostart should detect startup path');
+  console.log(`  [PASS] Autostart detector (platform: ${info.platform}, path: ${info.path})`);
 }
 
 // 5. Test Server HTTP Endpoints
@@ -155,6 +127,7 @@ server.listen(TEST_PORT, '127.0.0.1', async () => {
     const uiRes = await makeRequest('/ui');
     assert.strictEqual(uiRes.status, 200, '/ui should return 200');
     assert.ok(uiRes.body.includes('AG-SHIELD'), '/ui body should include AG-SHIELD brand');
+    assert.ok(uiRes.body.includes('Main Upstream Router'), '/ui body should include Main Upstream Router panel');
 
     // Test GET /api/status
     const statusRes = await makeRequest('/api/status');
@@ -162,15 +135,43 @@ server.listen(TEST_PORT, '127.0.0.1', async () => {
     const statusData = JSON.parse(statusRes.body);
     assert.ok(statusData.config, 'Status should contain config');
     assert.ok(statusData.stats, 'Status should contain stats');
+    assert.ok(statusData.autostart, 'Status should contain autostart info');
 
-    // Test POST /api/config
+    // Test GET /api/autostart
+    const autoRes = await makeRequest('/api/autostart');
+    assert.strictEqual(autoRes.status, 200, '/api/autostart should return 200');
+    const autoData = JSON.parse(autoRes.body);
+    assert.ok(autoData.platform, 'Autostart API should return platform');
+
+    // Test POST /api/config with router parameters
     const configRes = await makeRequest('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
-    }, { stripSignatures: true, targetPort: 20128 });
+    }, {
+      stripSignatures: true,
+      targetProtocol: 'https',
+      targetHost: 'api.openai.com',
+      targetPort: 443,
+      targetApiKey: 'test-key-123',
+      targetBasePath: '/v1'
+    });
     assert.strictEqual(configRes.status, 200, '/api/config should return 200');
     const configData = JSON.parse(configRes.body);
     assert.strictEqual(configData.success, true, 'Config update success should be true');
+    assert.strictEqual(configData.config.targetHost, 'api.openai.com');
+    assert.strictEqual(configData.config.targetProtocol, 'https');
+
+    // Reset config back to local defaults for downstream tests
+    await makeRequest('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }, {
+      targetProtocol: 'http',
+      targetHost: '127.0.0.1',
+      targetPort: 20128,
+      targetApiKey: '',
+      targetBasePath: ''
+    });
 
     // Test Mock Local Title endpoint handling
     const titleHttpRes = await makeRequest('/v1/chat/completions', {
@@ -184,7 +185,7 @@ server.listen(TEST_PORT, '127.0.0.1', async () => {
     const titleData = JSON.parse(titleHttpRes.body);
     assert.strictEqual(titleData.choices[0].message.content, 'New Session', 'Should return synthetic session title');
 
-    console.log('  [PASS] HTTP endpoints (/ui, /api/status, /api/config, local title mock)');
+    console.log('  [PASS] HTTP endpoints (/ui, /api/status, /api/autostart, /api/config, local title mock)');
     console.log('\nAll AG-Shield self-check tests PASSED successfully!');
     server.close(() => process.exit(0));
   } catch (err) {

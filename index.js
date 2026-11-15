@@ -2,6 +2,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -12,8 +13,11 @@ const UI_FILE = path.join(__dirname, 'ui.html');
 
 const DEFAULT_CONFIG = {
   listenPort: 20129,
+  targetProtocol: 'http',
   targetHost: '127.0.0.1',
   targetPort: 20128,
+  targetApiKey: '',
+  targetBasePath: '',
   stripSignatures: true,
   simplifyToolSchemas: true,
   fixReasoningEffort: true,
@@ -46,6 +50,89 @@ function saveConfig() {
   }
 }
 
+// --- Autostart System Boot Manager ---
+function getAutostartInfo() {
+  const platform = process.platform;
+  const scriptPath = path.resolve(__dirname, 'index.js');
+  const workDir = path.dirname(scriptPath);
+
+  if (platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    const startupDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+    const vbsPath = path.join(startupDir, 'ag-shield.vbs');
+    return { platform, path: vbsPath, enabled: fs.existsSync(vbsPath), scriptPath, workDir };
+  } else if (platform === 'darwin') {
+    const plistPath = path.join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.ag-shield.plist');
+    return { platform, path: plistPath, enabled: fs.existsSync(plistPath), scriptPath, workDir };
+  } else {
+    const autoDir = path.join(process.env.HOME || '', '.config', 'autostart');
+    const desktopPath = path.join(autoDir, 'ag-shield.desktop');
+    return { platform, path: desktopPath, enabled: fs.existsSync(desktopPath), scriptPath, workDir };
+  }
+}
+
+function setAutostart(enable) {
+  const info = getAutostartInfo();
+  try {
+    if (!enable) {
+      if (fs.existsSync(info.path)) {
+        fs.unlinkSync(info.path);
+      }
+      return { success: true, enabled: false, path: info.path };
+    }
+
+    const dir = path.dirname(info.path);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    if (info.platform === 'win32') {
+      const vbsContent = [
+        'Set WshShell = CreateObject("WScript.Shell")',
+        `WshShell.CurrentDirectory = "${info.workDir.replace(/\\/g, '\\\\')}"`,
+        `WshShell.Run "node """ & "${info.scriptPath.replace(/\\/g, '\\\\')}" & """", 0, False`,
+        ''
+      ].join('\r\n');
+      fs.writeFileSync(info.path, vbsContent, 'utf8');
+    } else if (info.platform === 'darwin') {
+      const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ag-shield</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>node</string>
+    <string>${info.scriptPath}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${info.workDir}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>`;
+      fs.writeFileSync(info.path, plist, 'utf8');
+    } else {
+      const desktop = `[Desktop Entry]
+Type=Application
+Name=AG-Shield
+Comment=Antigravity & Agentic AI Sanitizer Proxy
+Exec=node "${info.scriptPath}"
+Path=${info.workDir}
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true
+`;
+      fs.writeFileSync(info.path, desktop, 'utf8');
+    }
+
+    return { success: true, enabled: true, path: info.path };
+  } catch (err) {
+    return { success: false, error: err.message, path: info.path };
+  }
+}
+
 // CLI args parsing
 const args = process.argv.slice(2);
 let fileLogging = false;
@@ -60,17 +147,33 @@ Usage:
   ag-shield [port] [targetPort] [flags]
 
 Flags:
-  --log, -l           Append traffic events to proxy-traffic.log
-  --no-tools          Disable tool schema simplification
-  --no-local-title    Disable mocking of session_title calls
-  --host <host>       Set target upstream host (default: 127.0.0.1)
-  --port <port>       Set listen port (default: 20129)
-  --target-port <p>   Set target upstream port (default: 20128)
-  --help, -h          Show this help message
+  --log, -l             Append traffic events to proxy-traffic.log
+  --no-tools            Disable tool schema simplification
+  --no-local-title      Disable mocking of session_title calls
+  --host <host>         Set target upstream host (default: 127.0.0.1)
+  --port <port>         Set listen port (default: 20129)
+  --target-port <p>     Set target upstream port (default: 20128)
+  --protocol <http|https> Set upstream protocol (default: http)
+  --autostart-enable    Enable auto-start on system boot
+  --autostart-disable   Disable auto-start on system boot
+  --autostart-status    Check auto-start configuration status
+  --help, -h            Show this help message
 
 Web Dashboard:
   http://127.0.0.1:20129/ui
 `);
+    process.exit(0);
+  } else if (arg === '--autostart-enable') {
+    const res = setAutostart(true);
+    console.log(`[AG-SHIELD] Autostart on boot enabled at: ${res.path}`);
+    process.exit(0);
+  } else if (arg === '--autostart-disable') {
+    const res = setAutostart(false);
+    console.log(`[AG-SHIELD] Autostart on boot disabled.`);
+    process.exit(0);
+  } else if (arg === '--autostart-status') {
+    const info = getAutostartInfo();
+    console.log(`[AG-SHIELD] Autostart (${info.platform}): ${info.enabled ? 'ENABLED' : 'DISABLED'} -> ${info.path}`);
     process.exit(0);
   } else if (arg === '--log' || arg === '-l') {
     fileLogging = true;
@@ -84,6 +187,8 @@ Web Dashboard:
     config.targetHost = args[++i];
   } else if (arg === '--target-port' && args[i + 1]) {
     config.targetPort = parseInt(args[++i], 10);
+  } else if (arg === '--protocol' && args[i + 1]) {
+    config.targetProtocol = args[++i].toLowerCase();
   } else if (!isNaN(parseInt(arg, 10))) {
     if (!config._argvPortSet) {
       config.listenPort = parseInt(arg, 10);
@@ -98,6 +203,8 @@ Web Dashboard:
 if (process.env.PORT) config.listenPort = parseInt(process.env.PORT, 10);
 if (process.env.TARGET_HOST) config.targetHost = process.env.TARGET_HOST;
 if (process.env.TARGET_PORT) config.targetPort = parseInt(process.env.TARGET_PORT, 10);
+if (process.env.TARGET_PROTOCOL) config.targetProtocol = process.env.TARGET_PROTOCOL;
+if (process.env.TARGET_API_KEY) config.targetApiKey = process.env.TARGET_API_KEY;
 
 delete config._argvPortSet;
 loadConfig();
@@ -120,7 +227,6 @@ function logTraffic(entry) {
   trafficLogs.unshift(entry);
   if (trafficLogs.length > MAX_LOGS) trafficLogs.pop();
 
-  // Push to SSE clients
   const payload = `data: ${JSON.stringify({ type: 'log', data: entry })}\n\n`;
   for (const client of sseClients) {
     try {
@@ -130,7 +236,6 @@ function logTraffic(entry) {
     }
   }
 
-  // Broadcast stats
   const statsPayload = `data: ${JSON.stringify({ type: 'stats', data: getStats() })}\n\n`;
   for (const client of sseClients) {
     try {
@@ -155,20 +260,15 @@ function getStats() {
 
 // --- Sanitization Engine ---
 
-// Patterns for agent fingerprinting
 const AGENT_SIGNATURE_PATTERNS = [
-  // Names & explicit roles
   /(?:You are\s+)?(?:Hermes Agent|hermes-agent|Nous Research Hermes|Nous Research)/gi,
   /(?:You are\s+)?(?:OpenClaw|openclaw)/gi,
   /(?:You are\s+)?(?:Roo Code|Roo-Cline|Cline|Aider|Cursor Agent)/gi,
-  // Docs & repos
   /https?:\/\/(?:docs\.nousresearch\.com|github\.com\/nousresearch|github\.com\/cline|github\.com\/openclaw)[^\s)"]*/gi,
-  // Runtime environment marker blocks
   /#\s*Runtime environment[\s\S]*?(?:<!--\s*End runtime environment\s*-->|(?=\n#[A-Za-z0-9_\s]+|\n\n[A-Z]|$))/gi,
   /User home directory:\s*[^\n]+/gi,
   /Current working directory:\s*[^\n]+/gi,
   /Scratch directory:\s*[^\n]+/gi,
-  // Operational directives headers that trigger fingerprinting
   /#\s*Operational directives/gi,
   /#\s*Tool-use enforcement/gi
 ];
@@ -178,11 +278,9 @@ function sanitizeText(text, customReplacements = []) {
   let original = text;
   let modified = text;
 
-  // Built-in signature stripping
   if (config.stripSignatures) {
     for (const pattern of AGENT_SIGNATURE_PATTERNS) {
       modified = modified.replace(pattern, (match) => {
-        // If it was a "You are <Agent>" intro, keep a neutral system intro
         if (/^You are\s+/i.test(match)) {
           return 'You are a helpful AI assistant.';
         }
@@ -191,7 +289,6 @@ function sanitizeText(text, customReplacements = []) {
     }
   }
 
-  // Custom user-defined replacements
   if (Array.isArray(customReplacements)) {
     for (const rule of customReplacements) {
       if (rule && rule.find) {
@@ -210,21 +307,18 @@ function sanitizeText(text, customReplacements = []) {
   return { text: modified, changed: modified !== original };
 }
 
-// Recursive schema cleaner: collapse anyOf, strip unsupported JSON schema properties
 function cleanJsonSchema(schema) {
   if (!schema || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(cleanJsonSchema);
 
   const clone = { ...schema };
 
-  // Collapse anyOf / oneOf / allOf
   const candidates = clone.anyOf || clone.oneOf || clone.allOf;
   if (Array.isArray(candidates) && candidates.length > 0) {
     delete clone.anyOf;
     delete clone.oneOf;
     delete clone.allOf;
 
-    // Pick primary non-null candidate
     const primary = candidates.find(c => c && c.type && c.type !== 'null') || candidates[0];
     if (primary && typeof primary === 'object') {
       const cleanedPrimary = cleanJsonSchema(primary);
@@ -232,7 +326,6 @@ function cleanJsonSchema(schema) {
     }
   }
 
-  // Strip keys that cause 400/429 on Gemini / OpenAI compatibility endpoints
   delete clone.$schema;
   delete clone.additionalProperties;
   delete clone.strict;
@@ -258,10 +351,8 @@ function cleanJsonSchema(schema) {
   return clone;
 }
 
-// Title prompt detector to save RPM
 function isTitleGenerationRequest(body) {
   if (!body || !Array.isArray(body.messages) || body.messages.length === 0) return false;
-  // If explicitly requested title or short title generator
   const maxTokens = body.max_tokens || body.max_completion_tokens;
   const lastMsg = body.messages[body.messages.length - 1];
   const content = typeof lastMsg.content === 'string'
@@ -301,19 +392,16 @@ function generateMockTitleResponse(body) {
   };
 }
 
-// Sanitize the full OpenAI / Chat payload
 function sanitizePayload(body) {
   let changed = false;
   const changes = [];
 
-  // 1. Fix reasoning_effort: "none" -> "low"
   if (config.fixReasoningEffort && body.reasoning_effort === 'none') {
     body.reasoning_effort = 'low';
     changed = true;
     changes.push('Mapped reasoning_effort: "none" -> "low"');
   }
 
-  // 2. Strip signatures from messages
   if (Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       if (typeof msg.content === 'string') {
@@ -338,7 +426,6 @@ function sanitizePayload(body) {
     }
   }
 
-  // 3. Top-level system string (Anthropic or Gemini compat)
   if (typeof body.system === 'string') {
     const { text, changed: textChanged } = sanitizeText(body.system, config.customReplacements);
     if (textChanged) {
@@ -348,7 +435,6 @@ function sanitizePayload(body) {
     }
   }
 
-  // 4. Simplify tool schemas
   if (config.simplifyToolSchemas && Array.isArray(body.tools)) {
     for (const tool of body.tools) {
       if (tool.function) {
@@ -410,8 +496,113 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       config,
       stats: getStats(),
+      autostart: getAutostartInfo(),
       logs: trafficLogs
     }));
+  }
+
+  if (pathname === '/api/autostart' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(JSON.stringify(getAutostartInfo()));
+  }
+
+  if (pathname === '/api/autostart' && req.method === 'POST') {
+    let bodyData = '';
+    req.on('data', chunk => { bodyData += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(bodyData || '{}');
+        const enable = payload.enabled === true;
+        const result = setAutostart(enable);
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/test-upstream' && req.method === 'POST') {
+    let bodyData = '';
+    req.on('data', chunk => { bodyData += chunk; });
+    req.on('end', () => {
+      let targetP = config.targetProtocol || 'http';
+      let targetH = config.targetHost || '127.0.0.1';
+      let targetPt = config.targetPort || 20128;
+      let targetKey = config.targetApiKey || '';
+
+      try {
+        const parsed = JSON.parse(bodyData || '{}');
+        if (parsed.targetProtocol) targetP = parsed.targetProtocol;
+        if (parsed.targetHost) targetH = parsed.targetHost;
+        if (parsed.targetPort) targetPt = parseInt(parsed.targetPort, 10);
+        if (parsed.targetApiKey !== undefined) targetKey = parsed.targetApiKey;
+      } catch (_) {}
+
+      const isHttps = targetP === 'https' || targetPt === 443;
+      const clientLib = isHttps ? https : http;
+      const tStart = Date.now();
+
+      const headers = {
+        'User-Agent': 'AG-Shield-Tester/1.0',
+        'Host': `${targetH}:${targetPt}`
+      };
+      if (targetKey) {
+        headers['Authorization'] = `Bearer ${targetKey}`;
+      }
+
+      const testReq = clientLib.request({
+        hostname: targetH,
+        port: targetPt,
+        path: '/v1/models',
+        method: 'GET',
+        headers,
+        timeout: 4000
+      }, (testRes) => {
+        let respData = '';
+        testRes.on('data', c => { respData += c; });
+        testRes.on('end', () => {
+          const lat = Date.now() - tStart;
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({
+            ok: testRes.statusCode < 500,
+            status: testRes.statusCode,
+            latencyMs: lat,
+            message: `Upstream responded with HTTP ${testRes.statusCode} (${lat}ms)`
+          }));
+        });
+      });
+
+      testReq.on('timeout', () => {
+        testReq.destroy();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({
+          ok: false,
+          status: 408,
+          message: 'Connection timed out (4s)'
+        }));
+      });
+
+      testReq.on('error', (err) => {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({
+          ok: false,
+          status: 502,
+          message: `Connection failed: ${err.code || err.message}`
+        }));
+      });
+
+      testReq.end();
+    });
+    return;
   }
 
   if (pathname === '/api/config' && req.method === 'POST') {
@@ -523,15 +714,24 @@ const server = http.createServer((req, res) => {
           finalBody = Buffer.from(JSON.stringify(result.body));
         }
       } catch (err) {
-        // Fall back to original body if JSON parse fails
         console.warn('[AG-SHIELD] Could not parse request body as JSON:', err.message);
       }
     }
 
     // Forward to Upstream
+    const isHttps = config.targetProtocol === 'https' || config.targetPort === 443;
+    const transport = isHttps ? https : http;
+
     const proxyHeaders = { ...req.headers };
     delete proxyHeaders['host'];
-    proxyHeaders['host'] = `${config.targetHost}:${config.targetPort}`;
+    proxyHeaders['host'] = (config.targetPort === 80 || config.targetPort === 443)
+      ? config.targetHost
+      : `${config.targetHost}:${config.targetPort}`;
+
+    // Inject upstream target API key if configured
+    if (config.targetApiKey && config.targetApiKey.trim().length > 0) {
+      proxyHeaders['authorization'] = `Bearer ${config.targetApiKey.trim()}`;
+    }
 
     if (config.spoofUserAgent) {
       proxyHeaders['user-agent'] = 'OpenAI/NodeJS/4.0.0 (Windows NT 10.0; Win64; x64)';
@@ -545,19 +745,23 @@ const server = http.createServer((req, res) => {
       delete proxyHeaders['content-length'];
     }
 
-    const proxyReq = http.request({
+    let forwardPath = req.url;
+    if (config.targetBasePath) {
+      const base = config.targetBasePath.replace(/\/+$/, '');
+      forwardPath = base + (req.url.startsWith('/') ? req.url : '/' + req.url);
+    }
+
+    const proxyReq = transport.request({
       hostname: config.targetHost,
       port: config.targetPort,
-      path: req.url,
+      path: forwardPath,
       method: req.method,
       headers: proxyHeaders
     }, (proxyRes) => {
-      // Copy upstream headers & inject CORS
       const respHeaders = { ...proxyRes.headers };
       respHeaders['access-control-allow-origin'] = '*';
       res.writeHead(proxyRes.statusCode, respHeaders);
 
-      // Stream response chunks
       proxyRes.on('data', chunk => res.write(chunk));
       proxyRes.on('end', () => {
         res.end();
@@ -578,7 +782,7 @@ const server = http.createServer((req, res) => {
           status,
           latencyMs,
           sanitized,
-          snippet: `Proxied to ${config.targetHost}:${config.targetPort}`,
+          snippet: `Proxied to ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}`,
           details: { changes, model, status }
         });
       });
@@ -587,7 +791,7 @@ const server = http.createServer((req, res) => {
     proxyReq.on('error', (err) => {
       stats.errorCount++;
       const latencyMs = Date.now() - startTime;
-      const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetHost}:${config.targetPort} (${err.code || err.message})`;
+      const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort} (${err.code || err.message})`;
 
       const errPayload = JSON.stringify({
         error: {
@@ -627,12 +831,14 @@ const server = http.createServer((req, res) => {
 // Start Server
 if (require.main === module) {
   server.listen(config.listenPort, '0.0.0.0', () => {
+    const autoInfo = getAutostartInfo();
     console.log(`
 🛡️  AG-SHIELD (Antigravity & Agentic AI Sanitizer Proxy)
 -------------------------------------------------------
 📡 Proxy Endpoint:    http://127.0.0.1:${config.listenPort}/v1
-🎯 Target Gateway:    http://${config.targetHost}:${config.targetPort}
+🎯 Target Gateway:    ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}
 🖥️  Web Control Panel: http://127.0.0.1:${config.listenPort}/ui
+🚀 System Autostart:  ${autoInfo.enabled ? 'ACTIVE (' + autoInfo.path + ')' : 'OFF'}
 -------------------------------------------------------
 `);
   });
@@ -648,5 +854,7 @@ module.exports = {
   isTitleGenerationRequest,
   generateMockTitleResponse,
   sanitizePayload,
+  getAutostartInfo,
+  setAutostart,
   DEFAULT_CONFIG
 };
