@@ -90,7 +90,7 @@ function runSelfUpdate() {
 }
 
 // --- Configuration & Persistence ---
-const CONFIG_FILE = path.join(process.cwd(), 'ag-shield.config.json');
+const CONFIG_FILE = path.join(__dirname, 'ag-shield.config.json');
 const UI_FILE = path.join(__dirname, 'ui.html');
 
 const DEFAULT_CONFIG = {
@@ -108,10 +108,10 @@ const DEFAULT_CONFIG = {
   simplifyToolSchemas: true,
   noTools: false,
 
-  // 3. Reasoning Effort Fixer
+  // 3. Reasoning Effort Stripper (routes to default control bucket instead of exhausted medium bucket)
   fixReasoningEffort: true,
-  reasoningEffortSource: 'none',
-  reasoningEffortTarget: 'low',
+  reasoningEffortSource: 'any',
+  reasoningEffortTarget: 'remove',
 
   // 4. Local Title Mocker
   mockLocalTitles: true,
@@ -151,6 +151,9 @@ function saveConfig() {
   }
 }
 
+// Load saved config FIRST so CLI flags & env vars override it properly
+loadConfig();
+
 // --- Autostart System Boot Manager ---
 function getAutostartInfo() {
   const platform = process.platform;
@@ -185,7 +188,6 @@ WantedBy=multi-user.target
     const plistPath = path.join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.ag-shield.plist');
     return { platform, type: 'launchd', path: plistPath, enabled: fs.existsSync(plistPath), scriptPath, workDir, systemdSnippet };
   } else {
-    // Linux
     const home = process.env.HOME || '';
     const systemdUserDir = path.join(home, '.config', 'systemd', 'user');
     const systemdUserService = path.join(systemdUserDir, 'ag-shield.service');
@@ -263,7 +265,6 @@ function setAutostart(enable) {
 </plist>`;
       fs.writeFileSync(info.path, plist, 'utf8');
     } else {
-      // Linux: enable both systemd user service and desktop entry
       const home = process.env.HOME || '';
       const systemdUserDir = path.join(home, '.config', 'systemd', 'user');
       const servicePath = path.join(systemdUserDir, 'ag-shield.service');
@@ -357,7 +358,7 @@ function killProcessOnPort(port) {
         `powershell.exe -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
         { encoding: 'utf8', timeout: 5000 }
       ).trim();
-      const pids = out.split(/\r?\n/).map(s => parseInt(s.trim(), 10)).filter(p => p > 0 && p !== process.pid);
+      const pids = out.split(/\r?\n/).map(s => parseInt(s.trim(), 10)).filter(p => p > 4 && p !== process.pid);
       for (const pid of pids) {
         try { process.kill(pid); } catch (_) {}
       }
@@ -451,9 +452,10 @@ function printCliStatus(port) {
   });
 }
 
-// CLI args parsing
+// CLI args parsing (overrides loaded config)
 const args = process.argv.slice(2);
 let fileLogging = false;
+let argvPortSet = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -490,11 +492,9 @@ for (let i = 0; i < args.length; i++) {
       console.log(`[AG-SHIELD] New version available: v${info.latestVersion}! Updating...`);
       const res = runSelfUpdate();
       if (res.ok) {
-        console.log(`[AG-SHIELD] Update successful:
-${res.output}`);
+        console.log(`[AG-SHIELD] Update successful:\n${res.output}`);
       } else {
-        console.error(`[AG-SHIELD] Update failed: ${res.error || ''}
-Run manually: ${info.updateCommand}`);
+        console.error(`[AG-SHIELD] Update failed: ${res.error || ''}\nRun manually: ${info.updateCommand}`);
       }
       process.exit(res.ok ? 0 : 1);
     });
@@ -507,8 +507,8 @@ Usage:
   ag-shield [port] [targetPort] [flags]
 
 Flags:
-  --log, -l             Append traffic events to proxy-traffic.log
-  --no-tools            Disable tool schema simplification
+  --log, -l             Write full traffic debug log to hermes-traffic.log
+  --no-tools            Strip tools array completely (debug mode)
   --no-tray             Disable Windows system tray icon
   --no-local-title      Disable mocking of session_title calls
   --host <host>         Set target upstream host (default: 127.0.0.1)
@@ -535,7 +535,7 @@ Web Dashboard:
     console.log(`[AG-SHIELD] Autostart on boot enabled at: ${res.path}`);
     process.exit(0);
   } else if (arg === '--autostart-disable') {
-    const res = setAutostart(false);
+    setAutostart(false);
     console.log(`[AG-SHIELD] Autostart on boot disabled.`);
     process.exit(0);
   } else if (arg === '--autostart-status') {
@@ -565,7 +565,6 @@ sudo systemctl daemon-reload && sudo systemctl enable --now ag-shield
     fileLogging = true;
   } else if (arg === '--no-tools') {
     config.noTools = true;
-    config.simplifyToolSchemas = false;
   } else if (arg === '--no-local-title') {
     config.mockLocalTitles = false;
   } else if (arg === '--port' && args[i + 1]) {
@@ -577,9 +576,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now ag-shield
   } else if (arg === '--protocol' && args[i + 1]) {
     config.targetProtocol = args[++i].toLowerCase();
   } else if (!isNaN(parseInt(arg, 10))) {
-    if (!config._argvPortSet) {
+    if (!argvPortSet) {
       config.listenPort = parseInt(arg, 10);
-      config._argvPortSet = true;
+      argvPortSet = true;
     } else {
       config.targetPort = parseInt(arg, 10);
     }
@@ -592,9 +591,7 @@ if (process.env.TARGET_HOST) config.targetHost = process.env.TARGET_HOST;
 if (process.env.TARGET_PORT) config.targetPort = parseInt(process.env.TARGET_PORT, 10);
 if (process.env.TARGET_PROTOCOL) config.targetProtocol = process.env.TARGET_PROTOCOL;
 if (process.env.TARGET_API_KEY) config.targetApiKey = process.env.TARGET_API_KEY;
-
-delete config._argvPortSet;
-loadConfig();
+if (process.env.ENABLE_LOG === 'true') fileLogging = true;
 
 // --- Live Stats & Ring-Buffer ---
 const stats = {
@@ -621,7 +618,6 @@ function broadcastSSE(type, data) {
   }
 }
 
-// Keep-alive heartbeat every 10s to prevent connection dropouts
 setInterval(() => {
   for (const client of sseClients) {
     try { client.write(': keepalive\n\n'); } catch (_) { sseClients.delete(client); }
@@ -634,11 +630,6 @@ function logTraffic(entry) {
 
   broadcastSSE('log', entry);
   broadcastSSE('stats', getStats());
-
-  if (fileLogging) {
-    const line = `[${entry.timestamp}] ${entry.method} ${entry.path} - ${entry.status} (${entry.latencyMs}ms) - Model: ${entry.model || 'N/A'}\n`;
-    fs.appendFile('proxy-traffic.log', line, () => {});
-  }
 }
 
 function getStats() {
@@ -649,10 +640,10 @@ function getStats() {
 }
 
 // --- Sanitization Engine ---
-
 const LOG_FILE = path.join(__dirname, 'hermes-traffic.log');
 
 function writeLog(text) {
+  if (!fileLogging) return;
   try {
     fs.appendFileSync(LOG_FILE, text + '\n', 'utf8');
   } catch (_) {}
@@ -661,17 +652,70 @@ function writeLog(text) {
 function cleanTextSignature(text, customReplacements = []) {
   if (typeof text !== 'string') return text;
   let res = text
-    .replace(/You are a personal assistant running inside OpenClaw\./gi, 'You are a personal assistant.')
-    .replace(/For help with Hermes Agent itself/gi, 'For help with the agent itself')
-    .replace(/https:\/\/hermes-agent\.nousresearch\.com\/docs/gi, 'the official documentation')
-    .replace(/Hermes delivers their message/gi, 'the runtime delivers their message')
-    .replace(/You are chatting inside the Hermes desktop app, a graphical chat surface\./gi,
+    // 1. Confirmed Antigravity false-429 trigger sentences (#5697, #5701, #5703, Hermes v0.23.0)
+    .replace(/solve coding tasks\.\s*Be concise, practical, and tool-aware\./gi,
+      'work on their coding tasks. Keep responses concise and practical, and use the available tools when they help.')
+    .replace(/You are pair programming with a user to solve coding tasks\./gi,
+      'You pair program with the user on coding tasks.')
+    .replace(/When the user asks you to build, run, or verify something, the deliverable is a working artifact backed by real tool output/gi,
+      'If the user asks you to build, run or check something, deliver a working result based on actual tool output')
+    .replace(/Reporting a blocker honestly is always better than inventing a result\./gi,
+      'It is always better to report a blocker honestly than to make up a result.')
+    // #3358 / #2964: "Hermes Agent" + "Nous Research" together trigger 429; split at comma
+    .replace(/You are Hermes Agent, an intelligent AI assistant created by Nous Research./gi,
+      'You are Hermes Agent. You are an intelligent AI assistant created by Nous Research.')
+    // #5703: additional Hermes sentence triggers
+    .replace(/Be direct./gi, 'Get straight to the point.')
+    .replace(/is your authoritative reference/gi, 'is your reference guide')
+    .replace(/# Google model operational directives/gi, '# Model operational directives')
+
+    // 2. Specific URLs and multi-word Hermes phrases (must run BEFORE single-word 'hermes' replacement)
+    .replace(/https?:\/\/hermes-agent\.nousresearch\.com\/docs/gi, 'the official documentation')
+    .replace(/nousresearch\.com/gi, 'docs.local')
+    .replace(/For help with Hermes Agent itself/gi, 'For help with the assistant itself')
+        .replace(/Hermes delivers their message/gi, 'the runtime delivers their message')
+        .replace(/You are chatting inside the Hermes desktop app, a graphical chat surface\\./gi,
       'You are chatting inside a graphical desktop chat surface.')
+    .replace(/Act as an effective and practical assistant\. Your primary goal is to help the user by answering questions, writing and debugging code, analyzing information, creating content, and executing tasks using the available tools\./gi,
+      'You are a helpful coding and technical assistant. Assist the user with questions, code, analysis, and tasks using available tools.')
+
+    // 3. Structural headers and markers
+    .replace(/# Finishing the job/gi, '# Task completion')
+    .replace(/# Parallel tool calls/gi, '# Concurrent tool usage')
+    .replace(/## Mid-turn user steering/gi, '## Mid-turn user guidance')
+    .replace(/\[OUT-OF-BAND USER MESSAGE[^\]]*\]/gi, '[USER UPDATE]')
+    .replace(/\[\/OUT-OF-BAND USER MESSAGE\]/gi, '[/USER UPDATE]')
+    .replace(/<available_skills>/gi, '<available_guides>')
+    .replace(/<\/available_skills>/gi, '</available_guides>')
+    .replace(/Before replying, scan the skills below\./gi, 'Before replying, review the available guides below.')
+    .replace(/Skills come first:/gi, 'Guides come first:')
+    .replace(/## Skills/gi, '## Guides')
+    .replace(/═{10,}\s*MEMORY \(your personal notes\)[^═]*═{10,}/gi, '--- CONTEXT NOTES ---')
+    .replace(/═{10,}\s*USER PROFILE \(who the user is\)[^═]*═{10,}/gi, '--- USER CONTEXT ---')
+
+    // 4. Structural runtime headers (must run before generic 'hermes' catch-all)
     .replace(/# Hermes runtime environment/gi, '# Runtime environment')
     .replace(/<!-- End Hermes runtime environment -->/gi, '<!-- End runtime environment -->')
-    // Mask additional dynamic sections seen in real Hermes requests
-    .replace(/# Google model operational directives/gi, '# Operational directives')
-    .replace(/never via Hermes bot/gi, 'never via the assistant bot');
+
+    // 5. Env vars, paths, and identifiers
+    .replace(/HERMES_KANBAN_/gi, 'AGENT_KANBAN_')
+    .replace(/HERMES_TENANT/gi, 'AGENT_TENANT')
+    .replace(/hermes-agent/gi, 'agent-guide')
+    .replace(/hermes_tools/gi, 'agent_tools')
+    .replace(/data-hermes-send/gi, 'data-agent-send')
+    .replace(/window\.hermes\.send/gi, 'window.agent.send')
+    .replace(/never via Hermes bot/gi, 'never via the assistant bot')
+    .replace(/\bHermes\b/gi, 'the agent')
+
+    // 6. Generic catch-all (last, after all specific patterns)
+    .replace(/hermes/gi, 'agent')
+
+    // 7. OpenClaw & Gateway signatures
+    .replace(/You are a personal assistant running inside OpenClaw\./gi, 'You are a personal assistant.')
+    .replace(/\bantigravity\b/gi, 'upstream-service')
+    .replace(/\b9router\b/gi, 'local-gateway')
+    .replace(/انتی گراویتی/g, 'سرویس بالادستی')
+    .replace(/VALIDATION_REQUIRED/g, 'AUTH_CHECK');
 
   const replacements = Array.isArray(customReplacements) && customReplacements.length > 0
     ? customReplacements
@@ -692,7 +736,6 @@ function cleanTextSignature(text, customReplacements = []) {
   return res;
 }
 
-// Simplify complex JSON schemas (anyOf, additionalProperties, etc.) that trigger Antigravity 429/400
 function simplifySchema(schema) {
   if (!schema || typeof schema !== 'object') return schema;
   const copy = Array.isArray(schema) ? [...schema] : { ...schema };
@@ -706,7 +749,6 @@ function simplifySchema(schema) {
   delete copy.maximum;
 
   if (copy.anyOf) {
-    // Collapse anyOf into a generic string/object type for Antigravity compatibility
     delete copy.anyOf;
     if (!copy.type) copy.type = 'string';
   }
@@ -747,7 +789,7 @@ function isTitleGenerationRequest(body) {
   return false;
 }
 
-function generateMockTitleResponse(titleOrBody, model = 'gemini-3.8-flash-n') {
+function generateMockTitleResponse(titleOrBody, model = 'default') {
   let title = 'New Chat';
   let targetModel = model;
 
@@ -808,16 +850,23 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
   try {
     const json = JSON.parse(modifiedBody);
 
-    if (options.fixReasoningEffort !== false && json.reasoning_effort === (options.reasoningEffortSource || 'none')) {
-      const tgt = options.reasoningEffortTarget || 'low';
-      if (tgt === 'remove') {
-        delete json.reasoning_effort;
-      } else {
-        json.reasoning_effort = tgt;
-      }
-      changed = true;
-      changes.push(`reasoning_effort -> ${tgt}`);
-    }
+    // Strip or map reasoning_effort based on config target
+        if (options.fixReasoningEffort !== false && json.reasoning_effort !== undefined) {
+          const source = options.reasoningEffortSource || 'any';
+          const target = options.reasoningEffortTarget || 'remove';
+          const shouldAct = source === 'any' || json.reasoning_effort === source;
+          if (shouldAct) {
+            if (target === 'remove') {
+              delete json.reasoning_effort;
+              changes.push('Removed reasoning_effort');
+            } else {
+              json.reasoning_effort = target;
+              changed = true;
+              changes.push(`Mapped reasoning_effort to ${target}`);
+            }
+            if (target === 'remove') changed = true;
+          }
+        }
 
     if (Array.isArray(json.messages)) {
       if (options.mockLocalTitles !== false && isTitleGenerationRequest(json)) {
@@ -839,7 +888,7 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
 
       if (options.stripSignatures !== false) {
         json.messages = json.messages.map(m => {
-          if (m.role === 'system' || m.role === 'developer') {
+          if (m.role === 'system' || m.role === 'developer' || m.role === 'user') {
             if (typeof m.content === 'string') {
               const cleaned = cleanTextSignature(m.content, options.customReplacements);
               if (cleaned !== m.content) {
@@ -875,6 +924,30 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
       }
     }
 
+    // Native Gemini systemInstruction field support
+    if (options.stripSignatures !== false && json.systemInstruction) {
+      if (typeof json.systemInstruction === 'string') {
+        const cleaned = cleanTextSignature(json.systemInstruction, options.customReplacements);
+        if (cleaned !== json.systemInstruction) {
+          json.systemInstruction = cleaned;
+          changed = true;
+          changes.push('Sanitized systemInstruction string');
+        }
+      } else if (Array.isArray(json.systemInstruction.parts)) {
+        json.systemInstruction.parts = json.systemInstruction.parts.map(part => {
+          if (part && typeof part.text === 'string') {
+            const cleaned = cleanTextSignature(part.text, options.customReplacements);
+            if (cleaned !== part.text) {
+              part.text = cleaned;
+              changed = true;
+              changes.push('Sanitized systemInstruction part');
+            }
+          }
+          return part;
+        });
+      }
+    }
+
     // Handle tools array
     if (noTools) {
       if (json.tools) {
@@ -889,6 +962,9 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
         delete t.strict;
         if (t.function) {
           delete t.function.strict;
+          if (options.stripSignatures !== false && typeof t.function.description === 'string') {
+            t.function.description = cleanTextSignature(t.function.description, options.customReplacements);
+          }
           if (t.function.parameters) {
             t.function.parameters = simplifySchema(t.function.parameters);
             changed = true;
@@ -902,6 +978,10 @@ function sanitizePayload(rawBody, headers = {}, options = config) {
     if (json.strict !== undefined) {
       delete json.strict;
       changed = true;
+    }
+
+    if (changed) {
+      stats.sanitizedCount++;
     }
 
     modifiedBody = JSON.stringify(json);
@@ -925,7 +1005,6 @@ const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
-  // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     return res.end();
@@ -1255,49 +1334,104 @@ const server = http.createServer((req, res) => {
       forwardPath = base + (req.url.startsWith('/') ? req.url : '/' + req.url);
     }
 
-    const proxyReq = transport.request({
-      hostname: targetHost,
-      port: targetPort,
-      path: forwardPath,
-      method: req.method,
-      headers: proxyHeaders
-    }, (proxyRes) => {
-      const respHeaders = { ...proxyRes.headers };
-      respHeaders['access-control-allow-origin'] = '*';
-      res.writeHead(proxyRes.statusCode, respHeaders);
+    // Forward to Upstream with retry on 429 quota exhaustion
+    const isChatEndpoint = req.url.includes('/chat/completions') || req.url.includes('/messages');
 
-      let respChunks = [];
-      proxyRes.on('data', chunk => {
-        respChunks.push(chunk);
-        res.write(chunk);
-      });
-
-      proxyRes.on('end', () => {
-        res.end();
-        const latencyMs = Date.now() - startTime;
+    const forwardRequest = (attempt = 1) => new Promise((resolve, reject) => {
+      const proxyReq = transport.request({
+        hostname: targetHost,
+        port: targetPort,
+        path: forwardPath,
+        method: req.method,
+        headers: proxyHeaders
+      }, (proxyRes) => {
+        const respHeaders = { ...proxyRes.headers };
+        respHeaders['access-control-allow-origin'] = '*';
         const status = proxyRes.statusCode;
-        const fullResp = Buffer.concat(respChunks).toString('utf8');
 
-        if (req.url.includes('/chat/completions') || req.url.includes('/messages')) {
-          const endTs = new Date().toISOString();
-          if (status >= 400) {
-            console.log(`[${endTs}] ❌ STATUS ${status}: ${fullResp.slice(0, 300)}`);
-          } else {
-            console.log(`[${endTs}] ✅ STATUS ${status} OK (${fullResp.length} bytes)`);
-          }
-          writeLog(`\n--- RESPONSE FROM 9ROUTER (STATUS ${status}) ---`);
-          writeLog(fullResp);
+        // Retry on 429 quota exhaustion (upstream says "reset after Xs")
+        if (status === 429 && attempt < 3 && isChatEndpoint) {
+          let respChunks = [];
+          proxyRes.on('data', chunk => respChunks.push(chunk));
+          proxyRes.on('end', () => {
+            const fullResp = Buffer.concat(respChunks).toString('utf8');
+            let waitMs = 2000 * attempt;
+            try {
+              const m = fullResp.match(/reset after (\d+)s/);
+              if (m) waitMs = parseInt(m[1]) * 1000;
+            } catch (_) {}
+            console.log(`[AG-Shield] 429 quota exhausted, retry ${attempt}/3 after ${waitMs}ms`);
+            setTimeout(() => forwardRequest(attempt + 1).then(resolve, reject), waitMs);
+          });
+          return;
         }
 
-        let errorReason = '';
-        if (status >= 400) {
-          stats.errorCount++;
-          try {
-            const errObj = JSON.parse(fullResp);
-            errorReason = (errObj.error && errObj.error.message) || errObj.message || errObj.error || '';
-          } catch (_) {
-            errorReason = fullResp.slice(0, 120).trim();
+        res.writeHead(status, respHeaders);
+
+        let respChunks = [];
+        proxyRes.on('data', chunk => {
+          respChunks.push(chunk);
+          res.write(chunk);
+        });
+
+        proxyRes.on('end', () => {
+          res.end();
+          const latencyMs = Date.now() - startTime;
+          const fullResp = Buffer.concat(respChunks).toString('utf8');
+
+          if (isChatEndpoint) {
+            const endTs = new Date().toISOString();
+            if (status >= 400) {
+              console.log(`[${endTs}] ❌ STATUS ${status}: ${fullResp.slice(0, 300)}`);
+            } else {
+              console.log(`[${endTs}] ✅ STATUS ${status} OK (${fullResp.length} bytes)`);
+            }
+            writeLog(`\n--- RESPONSE FROM 9ROUTER (STATUS ${status}) ---`);
+            writeLog(fullResp);
           }
+
+          let errorReason = '';
+          if (status >= 400) {
+            stats.errorCount++;
+            try {
+              const errObj = JSON.parse(fullResp);
+              errorReason = (errObj.error && errObj.error.message) || errObj.message || errObj.error || '';
+            } catch (_) {
+              errorReason = fullResp.slice(0, 120).trim();
+            }
+          }
+
+          logTraffic({
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            method: req.method,
+            path: req.url,
+            model,
+            toolCount,
+            status,
+            latencyMs,
+            sanitized: changed,
+            snippet: errorReason
+              ? `${status} upstream: ${errorReason}`
+              : `Proxied to ${config.targetProtocol || 'http'}://${targetHost}:${targetPort}`,
+            details: { changes, model, status, errorReason, responsePreview: fullResp.slice(0, 300) }
+          });
+          resolve();
+        });
+      });
+
+      proxyReq.on('error', (err) => {
+        stats.errorCount++;
+        const latencyMs = Date.now() - startTime;
+        const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetProtocol || 'http'}://${targetHost}:${targetPort} (${err.code || err.message})`;
+
+        console.error('❌ Cannot reach 9Router:', err.message);
+        if (!res.headersSent) {
+          res.writeHead(502, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.end(JSON.stringify({ error: { message: errorMsg, code: 'UPSTREAM_UNAVAILABLE' } }));
         }
 
         logTraffic({
@@ -1307,50 +1441,22 @@ const server = http.createServer((req, res) => {
           path: req.url,
           model,
           toolCount,
-          status,
+          status: 502,
           latencyMs,
           sanitized: changed,
-          snippet: errorReason
-            ? `${status} upstream: ${errorReason}`
-            : `Proxied to ${config.targetProtocol || 'http'}://${targetHost}:${targetPort}`,
-          details: { changes, model, status, errorReason, responsePreview: fullResp.slice(0, 300) }
+          snippet: errorMsg,
+          details: { error: err.message, code: err.code }
         });
+        reject(err);
       });
-    });
 
-    proxyReq.on('error', (err) => {
-      stats.errorCount++;
-      const latencyMs = Date.now() - startTime;
-      const errorMsg = `AG-Shield: Upstream target unreachable at ${config.targetProtocol || 'http'}://${targetHost}:${targetPort} (${err.code || err.message})`;
-
-      console.error('❌ Cannot reach 9Router:', err.message);
-      if (!res.headersSent) {
-        res.writeHead(502, {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        });
-        res.end(JSON.stringify({ error: { message: errorMsg, code: 'UPSTREAM_UNAVAILABLE' } }));
+      if (modifiedBody) {
+        proxyReq.write(modifiedBody);
       }
-
-      logTraffic({
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        method: req.method,
-        path: req.url,
-        model,
-        toolCount,
-        status: 502,
-        latencyMs,
-        sanitized: changed,
-        snippet: errorMsg,
-        details: { error: err.message, code: err.code }
-      });
+      proxyReq.end();
     });
 
-    if (modifiedBody) {
-      proxyReq.write(modifiedBody);
-    }
-    proxyReq.end();
+    forwardRequest(1).catch(() => {});
   });
 });
 
@@ -1370,9 +1476,11 @@ if (require.main === module) {
   });
 
   server.listen(config.listenPort, '0.0.0.0', () => {
-    try {
-      fs.writeFileSync(LOG_FILE, `=== Log started at ${new Date().toISOString()} ===\n`, 'utf8');
-    } catch (_) {}
+    if (fileLogging) {
+      try {
+        fs.writeFileSync(LOG_FILE, `=== Log started at ${new Date().toISOString()} ===\n`, 'utf8');
+      } catch (_) {}
+    }
     if (!args.includes('--no-tray') && process.platform === 'win32') {
       startWindowsTray(config.listenPort);
     }
@@ -1384,6 +1492,7 @@ if (require.main === module) {
 🎯 Target Gateway:    ${config.targetProtocol || 'http'}://${config.targetHost}:${config.targetPort}
 🖥️  Web Control Panel: http://127.0.0.1:${config.listenPort}/ui
 🚀 System Autostart:  ${autoInfo.enabled ? 'ACTIVE (' + autoInfo.path + ')' : 'OFF'}
+📝 File Logging:      ${fileLogging ? 'ENABLED (' + LOG_FILE + ')' : 'OFF (use --log to enable)'}
 -------------------------------------------------------
 `);
   });

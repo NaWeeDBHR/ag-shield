@@ -289,7 +289,7 @@ async function runServerTests() {
     assert.strictEqual(upstreamReceivedRequest.headers['authorization'], 'Bearer test-token-xyz', 'Bearer header injected');
     assert.strictEqual(upstreamReceivedRequest.headers['user-agent'], 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'User-Agent spoofed');
     assert.strictEqual(upstreamReceivedRequest.headers['x-client-name'], undefined, 'Agent header stripped');
-    assert.strictEqual(upstreamReceivedBody.reasoning_effort, 'low', 'reasoning_effort fixed');
+    assert.strictEqual(upstreamReceivedBody.reasoning_effort, undefined, 'reasoning_effort removed');
     assert.strictEqual(upstreamReceivedBody.strict, undefined, 'strict stripped');
     assert.ok(!upstreamReceivedBody.messages[0].content.includes('Hermes Agent itself'), 'Signature stripped');
     assert.ok(upstreamReceivedBody.messages[0].content.includes('# Runtime environment'), 'Runtime environment preserved');
